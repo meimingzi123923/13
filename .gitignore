@@ -1,6 +1,6 @@
 # Gradle / Android 构建产物
 .gradle/
-build/
+/build/
 app/build/
 captures/
 .externalNativeBuild/
