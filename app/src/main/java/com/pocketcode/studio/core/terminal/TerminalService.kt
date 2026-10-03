@@ -94,6 +94,10 @@ class TerminalService : Service() {
         // JNI 绑定统一走 object PcsTerm（见 PcsTerm.kt），
         // 避免 external 声明在 companion object 中导致符号名带 _$Companion 而 UnsatisfiedLinkError。
         // C 侧实现见 app/src/main/cpp/term.cpp。
+
+        /** 前台服务通知渠道与通知 ID。 */
+        private const val CHANNEL_ID = "pcs_terminal"
+        private const val NOTIF_ID = 1001
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -131,10 +135,5 @@ class TerminalService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setOngoing(true)
             .build()
-    }
-
-    private companion object {
-        const val CHANNEL_ID = "pcs_terminal"
-        const val NOTIF_ID = 1001
     }
 }

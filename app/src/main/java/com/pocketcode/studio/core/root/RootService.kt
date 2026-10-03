@@ -22,7 +22,7 @@ class RootService {
     private val shell: Shell by lazy { Shell.getShell() }
 
     suspend fun detect(): Level = withContext(Dispatchers.IO) {
-        if (!Shell.isAppGrantedRoot()) return@withContext Level.NONE
+        if (Shell.isAppGrantedRoot() != true) return@withContext Level.NONE
         // 能拿到 root shell 即视为真 Root
         Level.ROOT
     }
@@ -47,7 +47,9 @@ class RootService {
      * 用法：RootService.stream("ping -c 4 8.8.8.8").collect { line -> ... }
      */
     fun stream(cmd: String, useRoot: Boolean = isRoot()): Flow<String> = flow {
-        Shell.cmd(cmd).to { line -> emit(line) }.exec()
+        val result = Shell.cmd(cmd).exec()
+        result.out.forEach { emit(it) }
+        result.err.forEach { emit(it) }
     }.flowOn(Dispatchers.IO)
 
     /** 常用 Root 操作模板 */

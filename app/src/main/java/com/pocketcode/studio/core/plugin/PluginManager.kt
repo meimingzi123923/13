@@ -26,6 +26,20 @@ object PluginHost {
 }
 
 /**
+ * JS 沙箱可见的宿主接口。
+ *
+ * QuickJS 的 set(name, type, object) 要求 type 必须是「不继承其它接口、且无重载方法」的接口，
+ * 方法返回值/参数只支持 void、boolean、int、double、String。故这里单列一个纯接口。
+ */
+interface PluginHostApi {
+    fun editorGet(): String
+    fun editorSet(text: String)
+    fun registerCommand(id: String)
+    fun toast(msg: String)
+    fun log(msg: String)
+}
+
+/**
  * 插件管理器：扫描 plugins/，加载 JS 插件（QuickJS 沙箱）。
  * JVM 插件（.jar/.dex）用 DexClassLoader，见 loadJvmPlugin()。
  */
@@ -75,29 +89,24 @@ class PluginManager(private val context: Context) {
         }
     }
 
-    /**
-     * 宿主桥：暴露给 JS 沙箱的 pcs.* 实际落点。
-     * QuickJS 只能传基本类型/字符串，函数回调以「命令 id」登记，由 UI 触发。
-     */
-    inner class HostBridge(private val pluginId: String) {
-        fun editorGet(): String = PluginHost.getText?.invoke() ?: ""
-        fun editorSet(text: String) { PluginHost.setText?.invoke(text) }
-        fun registerCommand(id: String) {
-            PluginHost.registered.getOrPut(pluginId) { mutableListOf() }.add(id)
-        }
-        fun toast(msg: String) {
-            PluginHost.toast?.invoke("[$pluginId] $msg")
-        }
-        @Suppress("unused")
-        fun log(msg: String) = android.util.Log.i("PCSPlugin", "[$pluginId] $msg")
-    }
-
     /** JS 插件：QuickJS 沙箱，注入 pcs.* 宿主 API。 */
     private fun loadJsPlugin(dir: File, manifest: Manifest): LoadedPlugin {
         val engine = QuickJs.create()
-        val host = HostBridge(manifest.id)
-        engine.set("__hostLog", host)   // 兼容旧写法 pcs.log 直接调 __hostLog.log
-        engine.set("__host", host)
+        // 宿主桥：暴露给 JS 沙箱的 pcs.* 实际落点。
+        // QuickJS 只能传基本类型/字符串，函数回调以「命令 id」登记，由 UI 触发。
+        val host = object : PluginHostApi {
+            override fun editorGet(): String = PluginHost.getText?.invoke() ?: ""
+            override fun editorSet(text: String) { PluginHost.setText?.invoke(text) }
+            override fun registerCommand(id: String) {
+                PluginHost.registered.getOrPut(manifest.id) { mutableListOf() }.add(id)
+            }
+            override fun toast(msg: String) { PluginHost.toast?.invoke("[${manifest.id}] $msg") }
+            override fun log(msg: String) {
+                android.util.Log.i("PCSPlugin", "[${manifest.id}] $msg")
+            }
+        }
+        engine.set("__host", PluginHostApi::class.java, host)
+        engine.set("__hostLog", PluginHostApi::class.java, host) // 兼容 pcs.log -> __hostLog.log
         val bootstrap = """
             var pcs = {
               editor: { getText: () => __host.editorGet(), setText: (s) => __host.editorSet(s) },
