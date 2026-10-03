@@ -9,13 +9,13 @@ plugins {
 
 android {
     namespace = "com.pocketcode.studio"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.pocketcode.studio"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
