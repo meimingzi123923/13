@@ -26,7 +26,10 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,6 +60,14 @@ import java.io.File
 fun EditorScreen(vm: EditorViewModel) {
     val state by vm.state.collectAsState()
     val active = state.active
+
+    val ctx = LocalContext.current
+    // 首次启动自动弹出引导；此后可通过工具栏 ❓ 随时唤出。
+    var showGuide by remember {
+        mutableStateOf(
+            !ctx.getSharedPreferences("pcs_prefs", 0).getBoolean("guide_shown", false)
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
 
@@ -78,6 +90,9 @@ fun EditorScreen(vm: EditorViewModel) {
             }
             IconButton(onClick = { vm.toggleTerminal() }) {
                 Icon(Icons.Default.Terminal, contentDescription = "终端")
+            }
+            IconButton(onClick = { showGuide = true }) {
+                Icon(Icons.Default.HelpOutline, contentDescription = "使用帮助")
             }
             Spacer(Modifier.weight(1f))
             if (state.rootAvailable) {
@@ -184,7 +199,71 @@ fun EditorScreen(vm: EditorViewModel) {
                 )
             }
         }
+
+        // 首次启动引导 / ❓ 帮助弹窗
+        if (showGuide) {
+            GuideDialog(
+                onDismiss = {
+                    showGuide = false
+                    ctx.getSharedPreferences("pcs_prefs", 0)
+                        .edit().putBoolean("guide_shown", true).apply()
+                },
+            )
+        }
     }
+}
+
+/**
+ * 内置使用引导：首次启动自动弹出，也可由工具栏 ❓ 唤出。
+ * 纯 Compose 实现，不依赖任何外部资源。
+ */
+@Composable
+private fun GuideDialog(onDismiss: () -> Unit) {
+    val sections = listOf(
+        "👋 欢迎使用 PocketCode Studio" to
+            "手机上的「口袋版 VSCode」：写代码 → 保存 → 一键运行 → 看终端输出。",
+        "① 打开 / 新建文件" to
+            "点顶部 📂 唤出文件树；工作区在 /sdcard/PocketCodeStudio/workspaces。" +
+            "用手机文件管理器把 .py / .js / .c 等文件放进去，回到 App 即可看到。",
+        "② 编辑与保存" to
+            "直接在中间编辑区打字，改完点 💾 保存。标签上出现 ● 表示尚未保存。",
+        "③ 一键运行 ▶" to
+            "点 ▶ 会按当前文件后缀自动挑命令并在终端执行：\n" +
+            "  .py → python3    .js → node    .c → gcc    .cpp → g++\n" +
+            "  .go → go run     .rs → cargo   .java → javac + java\n" +
+            "能否跑起来取决于设备上是否装了对应运行时（见下条）。",
+        "④ 终端 🖥" to
+            "点 🖥 打开底部终端，在 \$ 后敲命令，点 ↵ 提交。这是真 shell，可用 Root。",
+        "⑤ Root 权限" to
+            "授予 Root 后顶栏出现 🔒 Root，可执行 mount、改 /system 等系统级命令；" +
+            "未授权则为普通模式，仍可正常编辑文件。",
+        "⑥ 运行时去哪装" to
+            "若终端报 command not found，说明缺运行时。可在终端用 apt/pip/npm 安装，" +
+            "或等待后续版本的「proot 发行版一键安装」入口。",
+        "⑦ 更多帮助" to
+            "完整教程见项目 docs/09-使用指南.md；随时点顶栏 ❓ 重新打开本引导。",
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("开始使用") }
+        },
+        title = { Text("使用引导") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                sections.forEach { (title, body) ->
+                    Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        body,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+        },
+    )
 }
 
 /** 纯 Compose 文本编辑区；生产环境可替换为 Sora Editor 的 CodeEditor（AndroidView 包裹）。 */
