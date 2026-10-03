@@ -77,7 +77,7 @@ class BuildRunService(private val context: Context) {
     }
 
     /** 生成实际命令字符串。 */
-    fun buildCommand(cfg: RunConfig, projectDir: File, entryFile: File): String {
+    fun buildCommand(cfg: RunConfig, projectDir: File, entryFile: File, sandboxEnv: Boolean = true): String {
         val out = cfg.output ?: "a.out"
         val vars = mapOf(
             "entry" to entryFile.name,
@@ -89,7 +89,8 @@ class BuildRunService(private val context: Context) {
         // 沙盒环境：PATH/LD_LIBRARY_PATH/TMPDIR 指向应用私有目录，
         // 使 python3/node/… 解析到内置运行时，而不是系统 shell（系统里没有这些解释器）。
         val userEnv = cfg.env.entries.joinToString(" ") { "${it.key}=${it.value}" }
-        val prefix = sandbox.envPrefix() + if (userEnv.isBlank()) "" else "$userEnv "
+        val sbx = if (sandboxEnv) sandbox.envPrefix() else ""
+        val prefix = sbx + if (userEnv.isBlank()) "" else "$userEnv "
         return "cd ${sh(projectDir.absolutePath)} && ${prefix}$cmd"
     }
 
@@ -139,12 +140,35 @@ class BuildRunService(private val context: Context) {
             }
         }
 
-        // 3) 其它语言：走带沙盒 PATH 的 PTY 执行。
+        // 3) 其它语言：优先在 proot + Alpine 根文件系统内执行（自带 gcc/python3/node 等）。
+        if (sandbox.hasRootfs() || runCatching { sandbox.ensureRootfs() }.getOrDefault(false)) {
+            var inner = buildCommand(cfg, projectDir, entryFile, sandboxEnv = false)
+            val tool = SandboxRuntime.toolFor(cfg.language)
+            if (tool != null && !sandbox.rootfsHasTool(tool)) {
+                val pkgs = sandbox.packagesFor(cfg.language)
+                if (pkgs.isNotEmpty()) {
+                    val line = pkgs.joinToString(" ")
+                    terminal("\u001b[33m\u26a0 沙盒缺少 $line，正在 apk 安装（首次需联网）…\u001b[0m")
+                    inner = "apk add --no-cache $line >/dev/null && $inner"
+                }
+            }
+            cfg.build?.let { b ->
+                terminal("\u001b[90m$ " + b.replace("{entry}", entryFile.name)
+                    .replace("{out}", cfg.output ?: "a.out") + "\u001b[0m")
+            }
+            val wrapped = sandbox.prootWrap(inner)
+            if (wrapped != null) {
+                terminal("\u001b[36m\u25b6 应用沙盒（proot / Alpine）执行\u001b[0m")
+                return@withContext runPty(wrapped, root, terminal)
+            }
+        }
+
+        // 4) 回退：无 rootfs 时用带沙盒 PATH 的 PTY（需用户自备运行时）。
         val cmd = buildCommand(cfg, projectDir, entryFile)
         terminal("\u001b[36m\u25b6 $cmd\u001b[0m")
         SandboxRuntime.toolFor(cfg.language)?.let { tool ->
             if (!sandbox.isAvailable(cfg.language)) {
-                terminal("\u001b[33m⚠ 应用沙盒中未找到 $tool：请把运行时放入 assets/runtimes/bin 或导入运行时安装包\u001b[0m")
+                terminal("\u001b[33m\u26a0 应用沙盒中未找到 $tool：请把运行时放入 assets/runtimes/bin 或导入运行时安装包\u001b[0m")
             }
         }
 
@@ -155,13 +179,17 @@ class BuildRunService(private val context: Context) {
             terminal("\u001b[90m$ buildCmd\u001b[0m")
         }
 
+        runPty(cmd, root, terminal)
+    }
+
+    /** 把命令写入 PTY 执行；返回 0 表示已提交，-1 表示 PTY 不可用。 */
+    private fun runPty(cmd: String, root: Boolean, terminal: (String) -> Unit): Int {
         val fd = TerminalService.ensureSession(root = root)
         if (fd >= 0) {
             TerminalService.write(cmd)
-            0
-        } else {
-            terminal("\u001b[31m✗ PTY 不可用，已跳过执行（请确认 libpcs_term 已编译/加载）\u001b[0m")
-            -1
+            return 0
         }
+        terminal("\u001b[31m\u2717 PTY 不可用，已跳过执行（请确认 libpcs_term 已编译/加载）\u001b[0m")
+        return -1
     }
 }

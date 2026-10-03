@@ -16,7 +16,9 @@ android {
     defaultConfig {
         applicationId = "com.pocketcode.studio"
         minSdk = 26
-        targetSdk = 37
+        // 目标 28：Android 10+ 对 targetSdk>=29 的应用启用 W^X，禁止执行应用私有目录中的
+        // 可执行文件；沙盒内置的 proot / 语言运行时必须在私有目录执行，故沿用 Termux 的做法。
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
@@ -88,4 +90,7 @@ dependencies {
 
     // core library desugaring 运行时
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // tar.gz 解包（运行时释放内置 Alpine 根文件系统）
+    implementation("org.apache.commons:commons-compress:1.27.1")
 }
