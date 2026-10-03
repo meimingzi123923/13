@@ -61,20 +61,18 @@ val pty = nativeCreateSubprocess(fd, "/system/bin/sh")
 - 支持 UTF-8、ANSI 转义序列（颜色、光标）。
 - 终端控件可用 `Termux 的 terminal-emulator` 或 Compose 自绘。
 
-## 5. proot 与非 Root 完整 Linux
+## 5. 原生工具链与非 Root 方案
 
-即使不 Root，也能用 **proot-distro** 跑完整 Ubuntu（用户态模拟 root）：
+**v1.1 起不再使用 proot**：C/C++ 直接调用内置的 Termux aarch64 clang/lld，
+在应用私有目录原生 `exec`，无需 root、无需 rootfs。详见 docs/12-原生工具链.md。
 
-```bash
-# 首次安装（App 内置命令）
-proot-distro install ubuntu
-# 进入
-proot-distro login ubuntu
-# 内部即可 apt install gcc python3 nodejs ...
-```
+- 内置：C / C++（clang 21 + lld）；
+- 用户自备：Python / Node / Go / Rust 等二进制，通过「运行时」页面导入
+  （`SandboxRuntime.installFromZip` / `importExecutable`），App 负责设置
+  `PATH` / `LD_LIBRARY_PATH` 后原生执行。
 
-App 里提供「运行时」页面：一键安装/删除 ubuntu、alpine 等发行版。
-这样即使用户不 Root，也能获得**全面的依赖库**（apt 生态）。
+> 说明：Android 10+ 对 `targetSdk ≥ 29` 的应用启用 W^X，禁止执行私有目录中的
+> 可执行文件，因此本 App 保持 `targetSdk = 28`（仅适合侧载/开发用途）。
 
 ## 6. 命令安全策略
 

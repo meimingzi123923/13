@@ -61,7 +61,8 @@ arm64 手机上无法用它编译 `app/src/main/cpp/term.cpp`（终端原生库�
 
 1. **工具链缺失**：JDK / Android SDK / NDK 均未安装，且体积达数 GB。
 2. **架构不匹配**：官方 `aapt2`、`d8`、NDK 的 `clang` 均为 **x86_64 Linux 二进制**，
-   而手机是 **arm64**；proot 环境只做文件系统隔离，**不做 CPU 指令翻译**，
-   因此这些二进制根本无法执行（会报 `cannot execute binary file`）。
+   而手机是 **arm64**；本 App 内置的运行时只做文件系统/权限隔离，
+   **不做 CPU 指令翻译**，因此这些 x86_64 二进制根本无法执行（会报
+   `cannot execute binary file`）。工具链必须与设备 ABI 一致（如 aarch64）。
 3. **结论**：Android 应用的「首次构建」必然发生在一台 x86_64 主机或云端 runner 上。
    上述方案一正是用 GitHub 的免费 x86_64 runner 替你完成这一步。

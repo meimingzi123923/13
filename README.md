@@ -15,8 +15,8 @@
 | 能力 | 实现方式 | 说明 |
 |------|----------|------|
 | 代码编辑 | Sora Editor（原生） + Monaco（WebView，可选） | 语法高亮/自动补全/多标签 |
-| 终端 | 内嵌 PTY + proot Ubuntu / Termux 兼容层 | 真实 shell，非模拟 |
-| 语言运行 | 内置运行时 + proot 世界 | Python/Node/Go/Rust/C/C++/Java/Kotlin |
+| 终端 | 内嵌 PTY（JNI forkpty） | 真实 shell，非模拟 |
+| 语言运行 | 内置原生工具链 + 用户自备运行时 | C/C++ 内置 clang 21；Python/Node/Go/Rust 可导入 |
 | 编译 | clang/gcc、javac/d8、cargo、go build、gradle | 调用工具链，输出 APK/so/二进制 |
 | 依赖库 | pip / npm / cargo / go mod / maven 全量仓库 | 通过终端直接安装 |
 | 插件 | DexClassLoader 动态加载 + JS 插件（QuickJS） | 双轨插件系统 |

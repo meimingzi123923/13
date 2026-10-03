@@ -91,6 +91,8 @@ dependencies {
     // core library desugaring 运行时
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
-    // tar.gz 解包（运行时释放内置 Alpine 根文件系统）
+    // 归档/压缩解包（运行时释放内置工具链：deb = ar + data.tar.xz）
     implementation("org.apache.commons:commons-compress:1.27.1")
+    // xz 解压（deb 内的 data.tar.xz）
+    implementation("org.tukaani:xz:1.10")
 }

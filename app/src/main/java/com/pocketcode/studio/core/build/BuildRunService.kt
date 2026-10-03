@@ -2,6 +2,7 @@ package com.pocketcode.studio.core.build
 
 import android.content.Context
 import com.pocketcode.studio.core.sandbox.JsSandbox
+import com.pocketcode.studio.core.sandbox.NativeToolchain
 import com.pocketcode.studio.core.sandbox.SandboxRuntime
 import com.pocketcode.studio.core.terminal.TerminalService
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,11 @@ import java.io.File
 /**
  * 构建/运行服务：读取项目 .pcs/run.json，组装命令并交给终端执行。
  *
+ * 执行策略（按语言）：
+ *  - C / C++：使用 [NativeToolchain]（APK 内置 Android 原生 clang，无 proot、无 rootfs）；
+ *  - JavaScript：App 进程内 [JsSandbox]（QuickJS），不依赖系统 shell；
+ *  - 其它语言：回退到用户自备运行时（可用 [SandboxRuntime.installFromZip] 导入）。
+ *
  * 支持用户显式指定语言（language 参数）：
  *  - language == "auto"：优先读 .pcs/run.json，其次按文件后缀推断；
  *  - language 为具体语言：忽略后缀，直接使用该语言对应的运行命令。
@@ -21,8 +27,11 @@ class BuildRunService(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
-    /** 应用沙盒：内置运行时释放与解析（见 SandboxRuntime）。 */
+    /** 用户自备运行时（python / node / …）的导入与解析。 */
     private val sandbox = SandboxRuntime(context)
+
+    /** 内置原生 C/C++ 工具链（clang / lld / libc++ …，无 proot）。 */
+    private val native = NativeToolchain(context)
 
     @Serializable
     data class RunConfig(
@@ -76,8 +85,11 @@ class BuildRunService(private val context: Context) {
         else -> RunConfig("text", file.name, "cat {entry}")
     }
 
-    /** 生成实际命令字符串。 */
-    fun buildCommand(cfg: RunConfig, projectDir: File, entryFile: File, sandboxEnv: Boolean = true): String {
+    /**
+     * 生成实际命令字符串。
+     * @param envPrefix 前置环境变量（如 [NativeToolchain.envPrefix] 或 [SandboxRuntime.envPrefix]）。
+     */
+    fun buildCommand(cfg: RunConfig, projectDir: File, entryFile: File, envPrefix: String = ""): String {
         val out = cfg.output ?: "a.out"
         val vars = mapOf(
             "entry" to entryFile.name,
@@ -86,11 +98,8 @@ class BuildRunService(private val context: Context) {
         )
         var cmd = cfg.run
         vars.forEach { (k, v) -> cmd = cmd.replace("{$k}", v) }
-        // 沙盒环境：PATH/LD_LIBRARY_PATH/TMPDIR 指向应用私有目录，
-        // 使 python3/node/… 解析到内置运行时，而不是系统 shell（系统里没有这些解释器）。
         val userEnv = cfg.env.entries.joinToString(" ") { "${it.key}=${it.value}" }
-        val sbx = if (sandboxEnv) sandbox.envPrefix() else ""
-        val prefix = sbx + if (userEnv.isBlank()) "" else "$userEnv "
+        val prefix = envPrefix + if (userEnv.isBlank()) "" else "$userEnv "
         return "cd ${sh(projectDir.absolutePath)} && ${prefix}$cmd"
     }
 
@@ -99,7 +108,7 @@ class BuildRunService(private val context: Context) {
     /**
      * 真正执行：把组装好的命令写入 TerminalService 的 PTY。
      * - 会话存在（或可创建）时交由 PTY 交互式执行；
-     * - PTY 不可用（JNI 未就绪/降级）时回退到 libsu 的 root.stream。
+     * - PTY 不可用（JNI 未就绪/降级）时返回 -1。
      *
      * @param language 用户选择的运行语言；"auto" 表示按后缀自动推断。
      */
@@ -116,12 +125,7 @@ class BuildRunService(private val context: Context) {
             configForLanguage(language, entryFile)
         }
 
-        // 1) 释放 APK 内置运行时到应用沙盒（幂等，已存在则跳过）。
-        runCatching { sandbox.ensureExtracted() }.onSuccess { n ->
-            if (n > 0) terminal("\u001b[90m释放内置运行时 $n 个文件 → ${sandbox.binDir}\u001b[0m")
-        }
-
-        // 2) JS 且沙盒内没有 node：直接在 App 进程内用 QuickJS 沙盒执行，完全不依赖系统 shell。
+        // 1) JS 且沙盒内没有 node：直接在 App 进程内用 QuickJS 沙盒执行，完全不依赖系统 shell。
         if (SandboxRuntime.runsInProcess(cfg.language) && !sandbox.isAvailable(cfg.language)) {
             val file = if (entryFile.isFile) entryFile else File(projectDir, cfg.entry)
             if (!file.isFile) {
@@ -140,35 +144,29 @@ class BuildRunService(private val context: Context) {
             }
         }
 
-        // 3) 其它语言：优先在 proot + Alpine 根文件系统内执行（自带 gcc/python3/node 等）。
-        if (sandbox.hasRootfs() || runCatching { sandbox.ensureRootfs() }.getOrDefault(false)) {
-            var inner = buildCommand(cfg, projectDir, entryFile, sandboxEnv = false)
-            val tool = SandboxRuntime.toolFor(cfg.language)
-            if (tool != null && !sandbox.rootfsHasTool(tool)) {
-                val pkgs = sandbox.packagesFor(cfg.language)
-                if (pkgs.isNotEmpty()) {
-                    val line = pkgs.joinToString(" ")
-                    terminal("\u001b[33m\u26a0 沙盒缺少 $line，正在 apk 安装（首次需联网）…\u001b[0m")
-                    inner = "apk add --no-cache $line >/dev/null && $inner"
+        // 2) C / C++：使用 APK 内置的 Android 原生工具链（clang，无 proot）。
+        if (native.provides(cfg.language)) {
+            if (!native.available()) {
+                terminal("\u001b[36m\u25b6 首次释放内置 C/C++ 工具链（clang / lld，约 150MB）…\u001b[0m")
+            }
+            if (runCatching { native.ensure(log = terminal) }.getOrDefault(false)) {
+                cfg.build?.let { b ->
+                    terminal("\u001b[90m$ " + b.replace("{entry}", entryFile.name)
+                        .replace("{out}", cfg.output ?: "a.out") + "\u001b[0m")
                 }
+                terminal("\u001b[36m\u25b6 原生工具链（clang）执行\u001b[0m")
+                val cmd = buildCommand(cfg, projectDir, entryFile, native.envPrefix())
+                return@withContext runPty(cmd, root, terminal)
             }
-            cfg.build?.let { b ->
-                terminal("\u001b[90m$ " + b.replace("{entry}", entryFile.name)
-                    .replace("{out}", cfg.output ?: "a.out") + "\u001b[0m")
-            }
-            val wrapped = sandbox.prootWrap(inner)
-            if (wrapped != null) {
-                terminal("\u001b[36m\u25b6 应用沙盒（proot / Alpine）执行\u001b[0m")
-                return@withContext runPty(wrapped, root, terminal)
-            }
+            terminal("\u001b[31m✗ 工具链释放失败，回退为系统命令\u001b[0m")
         }
 
-        // 4) 回退：无 rootfs 时用带沙盒 PATH 的 PTY（需用户自备运行时）。
-        val cmd = buildCommand(cfg, projectDir, entryFile)
+        // 3) 其它语言：使用用户自备运行时（沙盒 bin/），否则回退为裸命令（可能提示 command not found）。
+        val cmd = buildCommand(cfg, projectDir, entryFile, sandbox.envPrefix())
         terminal("\u001b[36m\u25b6 $cmd\u001b[0m")
         SandboxRuntime.toolFor(cfg.language)?.let { tool ->
             if (!sandbox.isAvailable(cfg.language)) {
-                terminal("\u001b[33m\u26a0 应用沙盒中未找到 $tool：请把运行时放入 assets/runtimes/bin 或导入运行时安装包\u001b[0m")
+                terminal("\u001b[33m\u26a0 应用沙盒中未找到 $tool：该语言需自备运行时（可导入运行时安装包）\u001b[0m")
             }
         }
 
