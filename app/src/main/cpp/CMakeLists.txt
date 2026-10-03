@@ -8,8 +8,7 @@ add_library(pcs_term SHARED term.cpp)
 
 target_link_libraries(pcs_term
         android
-        log
-        util)          # forkpty/openpty 在 libutil 中
+        log)           # forkpty/openpty 由 bionic libc 提供，Android 无独立 libutil
 
 # 让 NDK 允许 forkpty 等声明
 target_compile_options(pcs_term PRIVATE -Wall -Wextra)
