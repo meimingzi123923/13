@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PocketCode Studio</string>
+    <string name="terminal_channel">编译与终端</string>
+    <string name="terminal_channel_desc">运行长时间编译任务时保持前台</string>
+</resources>

@@ -1,0 +1,24 @@
+# Gradle / Android 构建产物
+.gradle/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本地配置（含 SDK 路径，因机器而异）
+local.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 系统 / 临时文件
+.DS_Store
+*.log
+*.hprof
+
+# Keystore（切勿提交签名私钥）
+*.jks
+*.keystore
