@@ -90,17 +90,36 @@ class BuildRunService(private val context: Context) {
      * @param envPrefix 前置环境变量（如 [NativeToolchain.envPrefix] 或 [SandboxRuntime.envPrefix]）。
      */
     fun buildCommand(cfg: RunConfig, projectDir: File, entryFile: File, envPrefix: String = ""): String {
-        val out = cfg.output ?: "a.out"
-        val vars = mapOf(
-            "entry" to entryFile.name,
-            "file" to entryFile.absolutePath,
-            "out" to out,
-        )
+        val declaredOut = cfg.output ?: "a.out"
+        // Android 共享存储 /sdcard（→ /storage/emulated，FUSE）以 noexec 挂载，且该卷上
+        // chmod 的执行位不生效：任何落在 /sdcard 上的可执行产物都会 "can't execute: Permission denied"。
+        // 因此当工程位于不可执行卷、且当前语言会产出可执行文件时，把产物重定向到应用私有目录
+        // （/data/data/<pkg>/files/run，f2fs 可执行）后再运行。
+        val execDir = if (cfg.output != null && needsExecRedirect(projectDir)) {
+            File(context.filesDir, "run").apply { mkdirs() }
+        } else null
+        val outValue = execDir?.let { File(it, declaredOut).absolutePath } ?: declaredOut
         var cmd = cfg.run
-        vars.forEach { (k, v) -> cmd = cmd.replace("{$k}", v) }
+            .replace("./{out}", outValue)          // 先处理带 ./ 前缀的执行占位
+            .replace("{out}", outValue)            // 再处理 -o 后的产物占位
+            .replace("{entry}", entryFile.name)
+            .replace("{file}", entryFile.absolutePath)
         val userEnv = cfg.env.entries.joinToString(" ") { "${it.key}=${it.value}" }
         val prefix = envPrefix + if (userEnv.isBlank()) "" else "$userEnv "
         return "cd ${sh(projectDir.absolutePath)} && ${prefix}$cmd"
+    }
+
+    /**
+     * 判断工程目录是否位于「不可执行」的挂载卷。
+     * Android 的共享存储 /sdcard（/storage/emulated、/storage/self、/mnt/sdcard）为 FUSE，
+     * 挂载参数含 noexec，且在该卷上 chmod 的执行位不会生效。
+     */
+    private fun needsExecRedirect(dir: File): Boolean {
+        val p = dir.absolutePath
+        return p.startsWith("/sdcard") ||
+            p.startsWith("/storage/") ||
+            p.startsWith("/mnt/sdcard") ||
+            p.startsWith("/mnt/media_rw")
     }
 
     private fun sh(s: String) = "'" + s.replace("'", "'\\''") + "'"
