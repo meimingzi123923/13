@@ -56,7 +56,12 @@ dependencies {
     // Compose
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.foundation:foundation")
+    // UI 框架：小米 MiuiX（Compose Multiplatform 组件库）。
+    // 选用 0.3.0 —— 该版本用 Kotlin 2.0.21 编译，与本工程的 Kotlin 2.0.20 工具链兼容；
+    // 更新版本（>=0.3.8）用 Kotlin 2.1+ 编译，会触发「元数据版本过新」编译失败。
+    implementation("top.yukonga.miuix.kmp:miuix-android:0.3.0")
+    // 图标仍用 Compose 官方图标库（MiuiX 内置图标数量有限），它只依赖 material-icons-core，与 MiuiX 无冲突。
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")

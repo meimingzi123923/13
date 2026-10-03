@@ -10,6 +10,10 @@ import java.io.File
 
 /**
  * 构建/运行服务：读取项目 .pcs/run.json，组装命令并交给终端执行。
+ *
+ * 支持用户显式指定语言（language 参数）：
+ *  - language == "auto"：优先读 .pcs/run.json，其次按文件后缀推断；
+ *  - language 为具体语言：忽略后缀，直接使用该语言对应的运行命令。
  */
 class BuildRunService(private val context: Context) {
 
@@ -25,7 +29,7 @@ class BuildRunService(private val context: Context) {
         val env: Map<String, String> = emptyMap(),
     )
 
-    /** 读取项目配置；不存在则按语言生成默认。 */
+    /** 读取项目配置；不存在则按语言/后缀生成默认。 */
     fun loadConfig(projectDir: File, entryFile: File?): RunConfig {
         val cfgFile = File(projectDir, ".pcs/run.json")
         if (cfgFile.exists()) {
@@ -33,6 +37,24 @@ class BuildRunService(private val context: Context) {
                 .onSuccess { return it }
         }
         return defaultFor(entryFile ?: File(projectDir, "main.py"))
+    }
+
+    /** 按语言字符串生成配置（用户自选语言时使用）。 */
+    private fun configForLanguage(language: String, file: File): RunConfig {
+        val entry = file.name
+        return when (language.lowercase()) {
+            "python" -> RunConfig("python", entry, "python3 {entry}")
+            "javascript" -> RunConfig("javascript", entry, "node {entry}")
+            "typescript" -> RunConfig("typescript", entry, "npx tsx {entry}")
+            "c" -> RunConfig("c", entry, "gcc {entry} -o {out} && ./{out}",
+                build = "gcc {entry} -o {out}", output = "a.out")
+            "cpp" -> RunConfig("cpp", entry,
+                "g++ {entry} -o {out} && ./{out}", build = "g++ {entry} -o {out}", output = "a.out")
+            "go" -> RunConfig("go", entry, "go run {entry}")
+            "rust" -> RunConfig("rust", entry, "cargo run")
+            "java" -> RunConfig("java", entry, "javac {entry} && java Main")
+            else -> RunConfig("text", entry, "cat {entry}")
+        }
     }
 
     private fun defaultFor(file: File): RunConfig = when (file.extension.lowercase()) {
@@ -70,14 +92,21 @@ class BuildRunService(private val context: Context) {
      * 真正执行：把组装好的命令写入 TerminalService 的 PTY。
      * - 会话存在（或可创建）时交由 PTY 交互式执行；
      * - PTY 不可用（JNI 未就绪/降级）时回退到 libsu 的 root.stream。
+     *
+     * @param language 用户选择的运行语言；"auto" 表示按后缀自动推断。
      */
     suspend fun run(
         projectDir: File,
         entryFile: File,
         root: Boolean = false,
+        language: String = "auto",
         terminal: (String) -> Unit,
     ): Int = withContext(Dispatchers.IO) {
-        val cfg = loadConfig(projectDir, entryFile)
+        val cfg = if (language == "auto") {
+            loadConfig(projectDir, entryFile)
+        } else {
+            configForLanguage(language, entryFile)
+        }
         val cmd = buildCommand(cfg, projectDir, entryFile)
         terminal("\u001b[36m\u25b6 $cmd\u001b[0m")
 

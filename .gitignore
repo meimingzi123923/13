@@ -22,3 +22,5 @@ local.properties
 # Keystore（切勿提交签名私钥）
 *.jks
 *.keystore
+# 运行时工作区（由 App 自行创建）
+/workspaces/

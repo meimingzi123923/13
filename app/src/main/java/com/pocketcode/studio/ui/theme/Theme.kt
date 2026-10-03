@@ -1,41 +1,24 @@
 package com.pocketcode.studio.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.darkColorScheme
+import top.yukonga.miuix.kmp.theme.lightColorScheme
 
-/** 设计规范：低饱和蓝紫主色 + 深色背景 [04-UI设计.md] */
-private val Primary = Color(0xFF6C8CFF)
-private val BgDark = Color(0xFF0F1115)
-private val SurfaceDark = Color(0xFF161A22)
-private val OnDark = Color(0xFFE6E8EE)
-
-private val DarkColors = darkColorScheme(
-    primary = Primary,
-    onPrimary = Color.White,
-    background = BgDark,
-    surface = SurfaceDark,
-    onBackground = OnDark,
-    onSurface = OnDark,
-    outline = Color(0x1AFFFFFF),
-)
-
-private val LightColors = lightColorScheme(
-    primary = Primary,
-    background = Color(0xFFFAFAFC),
-)
-
+/**
+ * 全局主题：改用小米 MiuiX 设计体系（替换原 Material3）。
+ *
+ * MiuiX 自带亮/暗两套调色板，直接跟随系统深色模式即可；
+ * 后续若要手动切换深色或自定义主色，只需在这里构造 Colors 传给 MiuixTheme。
+ */
 @Composable
 fun PocketCodeTheme(
     dark: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (dark) DarkColors else LightColors,
-        typography = MaterialTheme.typography,
-        content = content
+    MiuixTheme(
+        colors = if (dark) darkColorScheme() else lightColorScheme(),
+        content = content,
     )
 }

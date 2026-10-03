@@ -1,13 +1,14 @@
 package com.pocketcode.studio.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,27 +17,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Tab
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,369 +36,323 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.io.File
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.extra.SuperArrow
+import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 主界面：默认仅「标签栏 + 编辑器 + 状态栏」三区（精简原则）。
- * 文件树与终端均为 overlay，按需出现，不常驻占屏。
+ * 主界面（MiuiX 版）。
+ * - 顶部：文件 / 保存 / 运行 / 终端 / 设置
+ * - 中部：标签页 + 代码编辑区
+ * - 底部：可折叠终端 + 状态栏
+ * - 浮层：文件树、设置页、首次使用引导
  */
 @Composable
 fun EditorScreen(vm: EditorViewModel) {
     val state by vm.state.collectAsState()
-    val active = state.active
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("pcs_prefs", Context.MODE_PRIVATE) }
+    var guideShown by remember { mutableStateOf(prefs.getBoolean("guide_shown", false)) }
 
-    val ctx = LocalContext.current
-    // 首次启动自动弹出引导；此后可通过工具栏 ❓ 随时唤出。
-    var showGuide by remember {
-        mutableStateOf(
-            !ctx.getSharedPreferences("pcs_prefs", 0).getBoolean("guide_shown", false)
-        )
-    }
-
-    Column(Modifier.fillMaxSize()) {
-
-        // ---------- 顶部工具条 ----------
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = { vm.toggleFileTree() }) {
-                Icon(Icons.Default.FolderOpen, contentDescription = "文件树")
-            }
-            IconButton(onClick = { vm.saveActive() }) {
-                Icon(Icons.Default.Save, contentDescription = "保存")
-            }
-            IconButton(onClick = { vm.runActive() }) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "运行")
-            }
-            IconButton(onClick = { vm.toggleTerminal() }) {
-                Icon(Icons.Default.Terminal, contentDescription = "终端")
-            }
-            IconButton(onClick = { showGuide = true }) {
-                Icon(Icons.Default.HelpOutline, contentDescription = "使用帮助")
-            }
-            Spacer(Modifier.weight(1f))
-            if (state.rootAvailable) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = "Root",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Root", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                }
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-
-        // ---------- 标签栏 ----------
-        if (state.tabs.isNotEmpty()) {
-            ScrollableTabRow(
-                selectedTabIndex = state.activeIndex,
-                edgePadding = 0.dp,
-            ) {
-                state.tabs.forEachIndexed { i, tab ->
-                    Tab(
-                        selected = i == state.activeIndex,
-                        onClick = { vm.openFile(tab.file) },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    (if (tab.dirty) "● " else "") + tab.file.name,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "关闭",
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .clickable { vm.closeTab(i) },
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-        }
-
-        // ---------- 编辑区 + overlay ----------
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-
-            if (active == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "打开左侧文件树，或从文件管理器选择代码文件开始编辑",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
-                }
-            } else {
-                EditorPane(
-                    text = active.text,
-                    onTextChange = { vm.updateActive(it) },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-
-            // 文件树 overlay（左侧抽屉）
-            if (state.fileTreeVisible) {
-                FileTreeOverlay(
-                    root = vm.workspace,
-                    onPick = { vm.openFile(it) },
-                    onDismiss = { vm.toggleFileTree() },
-                )
-            }
-
-            // 终端 overlay（底部面板）
-            if (state.terminalVisible) {
-                TerminalOverlay(
-                    lines = state.terminalLines,
-                    onCommand = { vm.execRoot(it) },
-                    onDismiss = { vm.toggleTerminal() },
-                    modifier = Modifier.align(Alignment.BottomStart),
-                )
-            }
-        }
-
-        // ---------- 状态栏 ----------
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(state.status, fontSize = 11.sp)
-            Spacer(Modifier.weight(1f))
-            active?.let {
-                Text(
-                    it.file.extension.ifBlank { "text" }.uppercase(),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                )
-            }
-        }
-
-        // 首次启动引导 / ❓ 帮助弹窗
-        if (showGuide) {
-            GuideDialog(
-                onDismiss = {
-                    showGuide = false
-                    ctx.getSharedPreferences("pcs_prefs", 0)
-                        .edit().putBoolean("guide_shown", true).apply()
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = "PocketCode Studio",
+                actions = {
+                    IconButton(onClick = { vm.toggleFileTree() }) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = "文件")
+                    }
+                    IconButton(onClick = { vm.saveActive() }) {
+                        Icon(Icons.Default.Save, contentDescription = "保存")
+                    }
+                    IconButton(onClick = { vm.runActive() }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "运行")
+                    }
+                    IconButton(onClick = { vm.toggleTerminal() }) {
+                        Icon(Icons.Default.Terminal, contentDescription = "终端")
+                    }
+                    IconButton(onClick = { vm.toggleSettings() }) {
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
+                    }
                 },
             )
-        }
-    }
-}
-
-/**
- * 内置使用引导：首次启动自动弹出，也可由工具栏 ❓ 唤出。
- * 纯 Compose 实现，不依赖任何外部资源。
- */
-@Composable
-private fun GuideDialog(onDismiss: () -> Unit) {
-    val sections = listOf(
-        "👋 欢迎使用 PocketCode Studio" to
-            "手机上的「口袋版 VSCode」：写代码 → 保存 → 一键运行 → 看终端输出。",
-        "① 打开 / 新建文件" to
-            "点顶部 📂 唤出文件树；工作区在 /sdcard/PocketCodeStudio/workspaces。" +
-            "用手机文件管理器把 .py / .js / .c 等文件放进去，回到 App 即可看到。",
-        "② 编辑与保存" to
-            "直接在中间编辑区打字，改完点 💾 保存。标签上出现 ● 表示尚未保存。",
-        "③ 一键运行 ▶" to
-            "点 ▶ 会按当前文件后缀自动挑命令并在终端执行：\n" +
-            "  .py → python3    .js → node    .c → gcc    .cpp → g++\n" +
-            "  .go → go run     .rs → cargo   .java → javac + java\n" +
-            "能否跑起来取决于设备上是否装了对应运行时（见下条）。",
-        "④ 终端 🖥" to
-            "点 🖥 打开底部终端，在 \$ 后敲命令，点 ↵ 提交。这是真 shell，可用 Root。",
-        "⑤ Root 权限" to
-            "授予 Root 后顶栏出现 🔒 Root，可执行 mount、改 /system 等系统级命令；" +
-            "未授权则为普通模式，仍可正常编辑文件。",
-        "⑥ 运行时去哪装" to
-            "若终端报 command not found，说明缺运行时。可在终端用 apt/pip/npm 安装，" +
-            "或等待后续版本的「proot 发行版一键安装」入口。",
-        "⑦ 更多帮助" to
-            "完整教程见项目 docs/09-使用指南.md；随时点顶栏 ❓ 重新打开本引导。",
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("开始使用") }
         },
-        title = { Text("使用引导") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                sections.forEach { (title, body) ->
-                    Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        body,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-                    )
-                    Spacer(Modifier.height(12.dp))
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            MainEditor(vm, state)
+
+            if (state.fileTreeVisible) FileTreeOverlay(vm, state)
+            if (state.settingsVisible) SettingsOverlay(vm, state)
+
+            val guide = remember { mutableStateOf(!guideShown) }
+            SuperDialog(
+                show = guide,
+                title = "欢迎使用 PocketCode Studio",
+                summary = "工作区已由 App 自动创建，并内置了示例文件。",
+                onDismissRequest = {
+                    guide.value = false
+                    guideShown = true
+                    prefs.edit().putBoolean("guide_shown", true).apply()
+                },
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("1. 顶部 📂 打开文件树，选择文件开始编辑", fontSize = 14.sp)
+                    Text("2. 💾 保存后，点 ▶ 一键运行", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text("3. ⚙ 进入设置，可自选默认运行语言", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
                 }
             }
-        },
-    )
+        }
+    }
 }
 
-/** 纯 Compose 文本编辑区；生产环境可替换为 Sora Editor 的 CodeEditor（AndroidView 包裹）。 */
 @Composable
-private fun EditorPane(
-    text: String,
-    onTextChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val vs = rememberScrollState()
-    BasicTextField(
-        value = text,
-        onValueChange = onTextChange,
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(vs)
-            .padding(12.dp),
-        textStyle = MaterialTheme.typography.bodyMedium.copy(
+private fun MainEditor(vm: EditorViewModel, state: UiState) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabStrip(vm, state)
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val tab = state.active
+            if (tab == null) {
+                Text(
+                    "没有打开的文件",
+                    modifier = Modifier.align(Alignment.Center),
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+            } else {
+                EditorPane(vm, tab)
+            }
+        }
+        if (state.terminalVisible) TerminalPanel(vm, state)
+        StatusBar(state)
+    }
+}
+
+@Composable
+private fun TabStrip(vm: EditorViewModel, state: UiState) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        state.tabs.forEachIndexed { i, tab ->
+            val selected = i == state.activeIndex
+            Row(
+                modifier = Modifier
+                    .clickable { vm.openFile(tab.file) }
+                    .background(
+                        if (selected) MiuixTheme.colorScheme.secondaryContainer else Color.Transparent
+                    )
+                    .padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = (if (tab.dirty) "● " else "") + tab.file.name,
+                    fontSize = 13.sp,
+                    color = if (selected) {
+                        MiuixTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MiuixTheme.colorScheme.onBackgroundVariant
+                    },
+                )
+                IconButton(
+                    onClick = { vm.closeTab(i) },
+                    minWidth = 26.dp,
+                    minHeight = 26.dp,
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "关闭",
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorPane(vm: EditorViewModel, tab: Tab) {
+    var value by remember(tab.file) { mutableStateOf(TextFieldValue(tab.text)) }
+    TextField(
+        value = value,
+        onValueChange = {
+            value = it
+            vm.updateActive(it.text)
+        },
+        modifier = Modifier.fillMaxSize().padding(8.dp),
+        textStyle = MiuixTheme.textStyles.main.copy(
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onBackground,
         ),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        label = "",
     )
 }
 
-/** 文件树 overlay：列出工作区内的文件，点击打开。 */
 @Composable
-private fun FileTreeOverlay(
-    root: File,
-    onPick: (File) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val files = remember(root) {
-        root.walkTopDown()
-            .filter { it.isFile && it.name != ".DS_Store" }
-            .take(500)
-            .toList()
-    }
-    Column(
-        Modifier
-            .fillMaxHeight()
-            .width(240.dp)
-            .background(MaterialTheme.colorScheme.surface),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("工作区", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "收起")
-            }
+private fun TerminalPanel(vm: EditorViewModel, state: UiState) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.terminalLines.size) {
+        if (state.terminalLines.isNotEmpty()) {
+            listState.scrollToItem(state.terminalLines.size - 1)
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        LazyColumn(Modifier.fillMaxSize()) {
-            if (files.isEmpty()) {
-                item { Text("（空）请先在工作区创建文件", Modifier.padding(12.dp), fontSize = 12.sp) }
+    }
+    var cmd by remember { mutableStateOf(TextFieldValue("")) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().height(220.dp).padding(6.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                items(state.terminalLines) { line ->
+                    Text(
+                        text = line,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                }
             }
-            items(files) { f ->
-                val rel = f.relativeTo(root).path
-                Text(
-                    rel,
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onPick(f) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    fontSize = 12.sp,
-                    maxLines = 1,
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextField(
+                    value = cmd,
+                    onValueChange = { cmd = it },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    label = "输入命令",
                 )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = {
+                    if (cmd.text.isNotBlank()) {
+                        vm.execRoot(cmd.text)
+                        cmd = TextFieldValue("")
+                    }
+                }) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "执行")
+                }
             }
         }
     }
 }
 
-/** 终端 overlay：显示输出并可输入命令。 */
 @Composable
-private fun TerminalOverlay(
-    lines: List<String>,
-    onCommand: (String) -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var input by remember { mutableStateOf("") }
-    Column(
-        modifier
-            .fillMaxWidth()
-            .height(220.dp)
-            .background(MaterialTheme.colorScheme.surface),
+private fun StatusBar(state: UiState) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("终端", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontSize = 13.sp)
-            IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "收起")
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            items(lines) { line ->
-                Text(
-                    line.trimEnd(),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("$ ", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            BasicTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            )
-            Text(
-                "↵",
-                Modifier
-                    .clickable {
-                        if (input.isNotBlank()) {
-                            onCommand(input)
-                            input = ""
-                        }
+        Text(
+            text = state.status,
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+        Text(
+            text = Languages.label(state.defaultLanguage) +
+                " · " + (if (state.rootAvailable) "Root" else "普通"),
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+    }
+}
+
+@Composable
+private fun FileTreeOverlay(vm: EditorViewModel, state: UiState) {
+    val files = remember(state.workspacePath) {
+        vm.workspace.listFiles()?.sortedBy { it.name } ?: emptyList()
+    }
+    Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = "文件",
+                navigationIcon = {
+                    IconButton(onClick = { vm.toggleFileTree() }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                     }
-                    .padding(horizontal = 8.dp),
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.primary,
+                },
+                defaultWindowInsetsPadding = false,
             )
+            if (files.isEmpty()) {
+                Text(
+                    "工作区为空",
+                    modifier = Modifier.padding(16.dp),
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                )
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(files) { f ->
+                        SuperArrow(
+                            title = f.name,
+                            summary = if (f.isDirectory) "目录" else "${f.length()} B",
+                            onClick = {
+                                if (!f.isDirectory) vm.openFile(f)
+                                vm.toggleFileTree()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
+    Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = "设置",
+                navigationIcon = {
+                    IconButton(onClick = { vm.toggleSettings() }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                defaultWindowInsetsPadding = false,
+            )
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item {
+                    Text(
+                        "默认运行语言",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                }
+                items(Languages.all) { pair ->
+                    SuperArrow(
+                        title = pair.second,
+                        rightText = if (state.defaultLanguage == pair.first) "已选择" else null,
+                        onClick = { vm.setDefaultLanguage(pair.first) },
+                    )
+                }
+                item {
+                    Text(
+                        "工作区",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    SuperArrow(
+                        title = "重建示例文件",
+                        summary = state.workspacePath,
+                        onClick = { vm.reseedWorkspace() },
+                    )
+                }
+            }
         }
     }
 }
