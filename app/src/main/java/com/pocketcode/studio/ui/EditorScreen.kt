@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketcode.studio.util.StoragePermission
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -49,12 +50,12 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.extra.SuperArrow
-import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 主界面（MiuiX 版）。
+ * 主界面（MiuiX 0.9.4 版）。
  * - 顶部：文件 / 保存 / 运行 / 终端 / 设置
  * - 中部：标签页 + 代码编辑区
  * - 底部：可折叠终端 + 状态栏
@@ -97,21 +98,19 @@ fun EditorScreen(vm: EditorViewModel) {
             if (state.fileTreeVisible) FileTreeOverlay(vm, state)
             if (state.settingsVisible) SettingsOverlay(vm, state)
 
-            val guide = remember { mutableStateOf(!guideShown) }
-            SuperDialog(
-                show = guide,
+            OverlayDialog(
+                show = !guideShown,
                 title = "欢迎使用 PocketCode Studio",
                 summary = "工作区已由 App 自动创建，并内置了示例文件。",
                 onDismissRequest = {
-                    guide.value = false
                     guideShown = true
                     prefs.edit().putBoolean("guide_shown", true).apply()
                 },
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text("1. 顶部 📂 打开文件树，选择文件开始编辑", fontSize = 14.sp)
-                    Text("2. 💾 保存后，点 ▶ 一键运行", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
-                    Text("3. ⚙ 进入设置，可自选默认运行语言", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text("1. 顶部选择文件树，选择文件开始编辑", fontSize = 14.sp)
+                    Text("2. 保存后，点运行一键执行", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text("3. 进入设置，可自选默认运行语言", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }
@@ -157,7 +156,7 @@ private fun TabStrip(vm: EditorViewModel, state: UiState) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = (if (tab.dirty) "● " else "") + tab.file.name,
+                    text = (if (tab.dirty) "* " else "") + tab.file.name,
                     fontSize = 13.sp,
                     color = if (selected) {
                         MiuixTheme.colorScheme.onSecondaryContainer
@@ -263,7 +262,8 @@ private fun StatusBar(state: UiState) {
         )
         Text(
             text = Languages.label(state.defaultLanguage) +
-                " · " + (if (state.rootAvailable) "Root" else "普通"),
+                " | " + (if (state.rootAvailable) "Root" else "普通") +
+                " | " + (if (state.storageGranted) "存储OK" else "存储受限"),
             fontSize = 12.sp,
             color = MiuixTheme.colorScheme.onBackgroundVariant,
         )
@@ -295,7 +295,7 @@ private fun FileTreeOverlay(vm: EditorViewModel, state: UiState) {
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(files) { f ->
-                        SuperArrow(
+                        ArrowPreference(
                             title = f.name,
                             summary = if (f.isDirectory) "目录" else "${f.length()} B",
                             onClick = {
@@ -312,6 +312,7 @@ private fun FileTreeOverlay(vm: EditorViewModel, state: UiState) {
 
 @Composable
 private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
+    val context = LocalContext.current
     Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopAppBar(
@@ -326,6 +327,21 @@ private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item {
                     Text(
+                        "权限",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                    ArrowPreference(
+                        title = "所有文件访问权限",
+                        summary = if (state.storageGranted) "已授权" else "未授权，点击前往系统设置授权",
+                        onClick = {
+                            if (!state.storageGranted) StoragePermission.requestAccess(context)
+                        },
+                    )
+                }
+                item {
+                    Text(
                         "默认运行语言",
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         fontSize = 13.sp,
@@ -333,9 +349,17 @@ private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
                     )
                 }
                 items(Languages.all) { pair ->
-                    SuperArrow(
+                    ArrowPreference(
                         title = pair.second,
-                        rightText = if (state.defaultLanguage == pair.first) "已选择" else null,
+                        endActions = {
+                            if (state.defaultLanguage == pair.first) {
+                                Text(
+                                    "已选择",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                )
+                            }
+                        },
                         onClick = { vm.setDefaultLanguage(pair.first) },
                     )
                 }
@@ -346,7 +370,7 @@ private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
                         fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                     )
-                    SuperArrow(
+                    ArrowPreference(
                         title = "重建示例文件",
                         summary = state.workspacePath,
                         onClick = { vm.reseedWorkspace() },

@@ -11,6 +11,7 @@ import com.pocketcode.studio.core.build.BuildRunService
 import com.pocketcode.studio.core.plugin.PluginHost
 import com.pocketcode.studio.core.root.RootService
 import com.pocketcode.studio.core.terminal.TerminalService
+import com.pocketcode.studio.util.StoragePermission
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,7 @@ data class UiState(
     val status: String = "就绪",
     val defaultLanguage: String = Languages.AUTO,
     val workspacePath: String = "",
+    val storageGranted: Boolean = false,
 ) {
     val active: Tab? get() = tabs.getOrNull(activeIndex)
 }
@@ -88,6 +90,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
             }
         }
+
+        refreshStorageAccess()
 
         // 首次启动：自动创建工作区 + 内置示例文件，并自动打开示例文件。
         viewModelScope.launch { seedWorkspace(force = false) }
@@ -219,6 +223,20 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             defaultLanguage = value,
             status = "默认运行语言：${Languages.label(value)}",
         )
+    }
+
+    /**
+     * 刷新「所有文件访问」授权状态。
+     * MainActivity.onResume 每次回到前台都会调用，用户从系统设置返回后立即生效。
+     */
+    fun refreshStorageAccess() {
+        val granted = StoragePermission.hasAccess(getApplication())
+        if (_state.value.storageGranted != granted) {
+            _state.value = _state.value.copy(
+                storageGranted = granted,
+                status = if (granted) "已获得所有文件访问权限" else "未获得文件访问权限",
+            )
+        }
     }
 
     /**
