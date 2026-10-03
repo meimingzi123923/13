@@ -44,6 +44,8 @@ android {
     // 说明：Kotlin 2.0 不再使用 composeOptions.kotlinCompilerExtensionVersion，
     //      Compose 编译器版本由 org.jetbrains.kotlin.plugin.compose 自动对齐。
     compileOptions {
+        // sora-editor:language-textmate 要求启用 core library desugaring
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -80,4 +82,7 @@ dependencies {
 
     // JS 插件引擎（QuickJS）
     implementation("app.cash.quickjs:quickjs-android:0.9.2")
+
+    // sora-editor 所需的 core library desugaring 运行时
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
