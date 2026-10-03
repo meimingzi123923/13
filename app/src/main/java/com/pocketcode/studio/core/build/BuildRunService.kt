@@ -1,6 +1,8 @@
 package com.pocketcode.studio.core.build
 
 import android.content.Context
+import com.pocketcode.studio.core.sandbox.JsSandbox
+import com.pocketcode.studio.core.sandbox.SandboxRuntime
 import com.pocketcode.studio.core.terminal.TerminalService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,6 +20,9 @@ import java.io.File
 class BuildRunService(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+
+    /** 应用沙盒：内置运行时释放与解析（见 SandboxRuntime）。 */
+    private val sandbox = SandboxRuntime(context)
 
     @Serializable
     data class RunConfig(
@@ -81,8 +86,10 @@ class BuildRunService(private val context: Context) {
         )
         var cmd = cfg.run
         vars.forEach { (k, v) -> cmd = cmd.replace("{$k}", v) }
-        val envPrefix = cfg.env.entries.joinToString(" ") { "${it.key}=${it.value}" }
-        val prefix = if (envPrefix.isBlank()) "" else "$envPrefix "
+        // 沙盒环境：PATH/LD_LIBRARY_PATH/TMPDIR 指向应用私有目录，
+        // 使 python3/node/… 解析到内置运行时，而不是系统 shell（系统里没有这些解释器）。
+        val userEnv = cfg.env.entries.joinToString(" ") { "${it.key}=${it.value}" }
+        val prefix = sandbox.envPrefix() + if (userEnv.isBlank()) "" else "$userEnv "
         return "cd ${sh(projectDir.absolutePath)} && ${prefix}$cmd"
     }
 
@@ -107,8 +114,39 @@ class BuildRunService(private val context: Context) {
         } else {
             configForLanguage(language, entryFile)
         }
+
+        // 1) 释放 APK 内置运行时到应用沙盒（幂等，已存在则跳过）。
+        runCatching { sandbox.ensureExtracted() }.onSuccess { n ->
+            if (n > 0) terminal("\u001b[90m释放内置运行时 $n 个文件 → ${sandbox.binDir}\u001b[0m")
+        }
+
+        // 2) JS 且沙盒内没有 node：直接在 App 进程内用 QuickJS 沙盒执行，完全不依赖系统 shell。
+        if (SandboxRuntime.runsInProcess(cfg.language) && !sandbox.isAvailable(cfg.language)) {
+            val file = if (entryFile.isFile) entryFile else File(projectDir, cfg.entry)
+            if (!file.isFile) {
+                terminal("\u001b[31m✗ 找不到入口文件：${file.name}\u001b[0m")
+                return@withContext -1
+            }
+            terminal("\u001b[36m\u25b6 应用沙盒（QuickJS）执行 ${file.name}\u001b[0m")
+            val js = runCatching { JsSandbox { line -> terminal(line) } }.getOrElse {
+                terminal("\u001b[31m✗ QuickJS 沙盒不可用：${it.message}\u001b[0m")
+                return@withContext -1
+            }
+            return@withContext try {
+                js.eval(file.readText())
+            } finally {
+                js.close()
+            }
+        }
+
+        // 3) 其它语言：走带沙盒 PATH 的 PTY 执行。
         val cmd = buildCommand(cfg, projectDir, entryFile)
         terminal("\u001b[36m\u25b6 $cmd\u001b[0m")
+        SandboxRuntime.toolFor(cfg.language)?.let { tool ->
+            if (!sandbox.isAvailable(cfg.language)) {
+                terminal("\u001b[33m⚠ 应用沙盒中未找到 $tool：请把运行时放入 assets/runtimes/bin 或导入运行时安装包\u001b[0m")
+            }
+        }
 
         // 已有编译步骤（如 C/C++）时先跑构建
         cfg.build?.let { b ->
