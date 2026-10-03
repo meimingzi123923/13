@@ -20,12 +20,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # 直接用 runner 预装的 Android SDK（ANDROID_HOME 已就绪），
+      # 不再使用 android-actions/setup-android@v3（其内部的 `sdkmanager tools`
+      # 在新版 SDK 仓库上会因找不到独立 `tools` 包而失败）。
       - name: Install platform / build-tools / NDK / CMake
         run: |
-          sdkmanager --install \
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(ls -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"
+          fi
+          echo "sdkmanager = $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --install \
             "platforms;android-34" \
             "build-tools;34.0.0" \
             "ndk;26.1.10909125" \
