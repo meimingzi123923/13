@@ -172,11 +172,41 @@ class SandboxRuntime(private val context: Context) {
     //
     // Android 的 /system/bin/sh 里没有这些解释器；这里内置一份静态 proot
     // （assets/runtimes/bin/proot）与 Alpine aarch64 minirootfs
-    // （assets/runtimes/rootfs/alpine-minirootfs-aarch64.tar.gz），
+    // （assets/runtimes/rootfs/alpine-minirootfs-aarch64.tar；仓库里若放 .tar.gz，AAPT 会自动解压并去掉后缀），
     // 运行时把程序放进 rootfs 内执行，缺失的编译工具用 apk 现场安装。
     // ============================================================
 
-    private val rootfsArchive = "alpine-minirootfs-aarch64.tar.gz"
+    /**
+     * 内置 rootfs 资产候选名。
+     *
+     * 注意：AAPT 打包时会自动把 assets 里的 `.gz` 文件**解压并去掉 `.gz` 后缀**，
+     * 所以即便仓库里放的是 `alpine-minirootfs-aarch64.tar.gz`，
+     * APK 里的实际条目也会变成 `alpine-minirootfs-aarch64.tar`。
+     * 这里两个名字都试，并且按 gzip 魔数自动判断是否需要解压，双保险。
+     */
+    private val rootfsArchiveCandidates = listOf(
+        "alpine-minirootfs-aarch64.tar.gz",
+        "alpine-minirootfs-aarch64.tar",
+    )
+
+    /** 打开内置 rootfs 资产；找不到返回 null。 */
+    private fun openRootfsAsset(): java.io.InputStream? {
+        for (name in rootfsArchiveCandidates) {
+            val ins = runCatching { context.assets.open("$ASSET_ROOT/rootfs/$name") }.getOrNull()
+            if (ins != null) return ins
+        }
+        return null
+    }
+
+    /** 若输入以 gzip 魔数 0x1f8b 开头则包一层 GZIPInputStream，否则原样返回（AAPT 解压后的 tar）。 */
+    private fun maybeGunzip(raw: java.io.InputStream): java.io.InputStream {
+        val buf = java.io.BufferedInputStream(raw)
+        buf.mark(4)
+        val b0 = buf.read()
+        val b1 = buf.read()
+        buf.reset()
+        return if (b0 == 0x1f && b1 == 0x8b) GZIPInputStream(buf) else buf
+    }
 
     /** Alpine 根文件系统解压根目录。 */
     val rootfsDir: File get() = File(root, "rootfs")
@@ -189,7 +219,8 @@ class SandboxRuntime(private val context: Context) {
 
     /** proot + rootfs 是否都已就绪。 */
     fun hasRootfs(): Boolean =
-        proot() != null && rootfsStamp.isFile && File(rootfsDir, "bin/sh").exists()
+        proot() != null && rootfsStamp.isFile &&
+            (File(rootfsDir, "bin/sh").exists() || File(rootfsDir, "bin/busybox").exists())
 
     /**
      * 幂等释放内置 Alpine 根文件系统。
@@ -200,13 +231,12 @@ class SandboxRuntime(private val context: Context) {
         if (!force && hasRootfs()) return true
         val pr = proot() ?: return false
         runCatching { pr.setExecutable(true, false) }
-        val input = runCatching { context.assets.open("$ASSET_ROOT/rootfs/$rootfsArchive") }
-            .getOrNull() ?: return false
+        val raw = openRootfsAsset() ?: return false
         if (force) rootfsDir.deleteRecursively()
         rootfsDir.mkdirs()
         return runCatching {
-            GZIPInputStream(input).use { gz ->
-                TarArchiveInputStream(gz).use { tar -> extractTar(tar, rootfsDir) }
+            maybeGunzip(raw).use { stream ->
+                TarArchiveInputStream(stream).use { tar -> extractTar(tar, rootfsDir) }
             }
             rootfsStamp.writeText("ok")
             true

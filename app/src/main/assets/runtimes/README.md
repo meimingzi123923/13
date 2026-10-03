@@ -23,7 +23,7 @@ filesDir/sandbox/tmp/    ← 临时目录（TMPDIR 指到这里）
 
 ```
 bin/proot                          ← 静态 aarch64 proot（无任何依赖）
-rootfs/alpine-minirootfs-aarch64.tar.gz  ← Alpine 3.20 aarch64 迷你根文件系统
+rootfs/alpine-minirootfs-aarch64.tar     ← Alpine 3.20 aarch64 迷你根文件系统（AAPT 会自动解压 .gz，故直接放 .tar）
 ```
 
 运行时会在首次执行非 JS 程序时把 rootfs 解压到 `filesDir/sandbox/rootfs/`，

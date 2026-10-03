@@ -19,7 +19,7 @@ Android 上的 app 不能擅自安装系统软件，但可以**自带一套最�
 | 文件 | 说明 | 来源 |
 |------|------|------|
 | `bin/proot` | 静态 aarch64 proot，1.5 MB，无任何动态依赖 | `ysdragon/proot-static` v5.4.0 |
-| `rootfs/alpine-minirootfs-aarch64.tar.gz` | Alpine 3.20 迷你根文件系统，3.9 MB | `dl-cdn.alpinelinux.org` |
+| `rootfs/alpine-minirootfs-aarch64.tar` | Alpine 3.20 迷你根文件系统，9.1 MB（未压缩 tar） | `dl-cdn.alpinelinux.org` |
 
 运行时流程：
 
@@ -66,7 +66,18 @@ Android 10（API 29）起对 **targetSdk ≥ 29** 的应用启用 W^X：
 符号链接 / 硬链接 / 目录（这些用 `java.util.zip` 无法正确还原）。
 解包时按 owner-execute 位补 `setExecutable(true)`。
 
-### 3. 自动安装工具链
+### 3. AAPT 会把 `.gz` 资产解压并改名（重大坑）
+
+打包时 AAPT 会自动把 assets 里的 `.gz` 文件**解压并去掉 `.gz` 后缀**：
+仓库里放 `alpine-minirootfs-aarch64.tar.gz`，APK 里的条目却变成
+`alpine-minirootfs-aarch64.tar`（9.1 MB 未压缩）。这会让 `assets.open("…tar.gz")`
+直接失败，proot 永远起不来。
+
+对策（双保险）：
+- 仓库里直接放未压缩的 `alpine-minirootfs-aarch64.tar`（APK 内仍会被 deflate 压缩，体积几乎不变）；
+- 代码同时尝试 `.tar.gz` / `.tar` 两个名字，并**按 gzip 魔数 `1f 8b` 自动判断**是否需要解压。
+
+### 4. 自动安装工具链
 
 首次运行某语言时，若 rootfs 内没有对应工具，自动在 proot 内执行
 `apk add --no-cache <包>`（见 README 的映射表）。首次需要联网，装好后持久保存在 rootfs。
