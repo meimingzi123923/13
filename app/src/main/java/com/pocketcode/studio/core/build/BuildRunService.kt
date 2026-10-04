@@ -63,4 +63,52 @@ class BuildRunService(private val context: Context) {
         terminal("\u001b[31m\u2717 终端不可用，请确认 libpcs_term 已编译加载\u001b[0m")
         return -1
     }
+
+    // ─────────────────────────────────────────────
+    // 实时语法检查（不运行，只做词法/语法分析）
+    // ─────────────────────────────────────────────
+
+    data class SyntaxError(
+        val line: Int,      // 1-based
+        val column: Int,    // 1-based
+        val message: String,
+        val isError: Boolean,
+    )
+
+    /**
+     * 用 clang -fsyntax-only 做语法检查，返回错误/警告列表。
+     * 通过 ProcessBuilder 直接调用（不经过 PTY），便于解析输出。
+     */
+    suspend fun syntaxCheck(sourceFile: File): List<SyntaxError> = withContext(Dispatchers.IO) {
+        if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
+            return@withContext emptyList()
+        }
+        val cmd = "${native.envPrefix()}clang -fsyntax-only -Wall ${sh(sourceFile.name)}"
+        runCatching {
+            val pb = ProcessBuilder("sh", "-c", "cd ${sh(sourceFile.parentFile?.absolutePath ?: ".")} && $cmd")
+                .redirectErrorStream(true)
+            val proc = pb.start()
+            val output = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            parseClangOutput(output)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun parseClangOutput(output: String): List<SyntaxError> {
+        val errors = mutableListOf<SyntaxError>()
+        val regex = Regex("""^[^:]+:(\d+):(\d+):\s+(error|warning):\s+(.+)$""")
+        output.lineSequence().forEach { line ->
+            regex.find(line)?.let { m ->
+                errors.add(
+                    SyntaxError(
+                        line = m.groupValues[1].toInt(),
+                        column = m.groupValues[2].toInt(),
+                        message = m.groupValues[4].trim(),
+                        isError = m.groupValues[3] == "error",
+                    )
+                )
+            }
+        }
+        return errors
+    }
 }

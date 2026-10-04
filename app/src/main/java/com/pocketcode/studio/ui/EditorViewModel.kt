@@ -11,11 +11,15 @@ import com.pocketcode.studio.core.build.BuildRunService
 import com.pocketcode.studio.core.plugin.PluginHost
 import com.pocketcode.studio.core.terminal.TerminalService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 /** 一个打开的标签。 */
@@ -40,6 +44,13 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    /** 实时语法诊断（错误/警告），编辑器据此画波浪线。 */
+    private val _diagnostics = MutableStateFlow<List<BuildRunService.SyntaxError>>(emptyList())
+    val diagnostics: StateFlow<List<BuildRunService.SyntaxError>> = _diagnostics.asStateFlow()
+
+    private var syntaxJob: Job? = null
+    private val syntaxMutex = Mutex()
 
     /**
      * 工作区放在应用私有目录（filesDir/workspace）：
@@ -93,6 +104,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openFile(f: File) {
+        syntaxJob?.cancel()
+        _diagnostics.value = emptyList()
         if (_state.value.tabs.any { it.file == f }) {
             _state.value = _state.value.copy(activeIndex = _state.value.tabs.indexOfFirst { it.file == f })
             return
@@ -103,6 +116,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
                 tabs = _state.value.tabs + Tab(f, text),
                 activeIndex = _state.value.tabs.size,
             )
+            // 对已存在的文件做一次语法检查
+            if (text.isNotEmpty()) requestSyntaxCheck(f, text)
         }
     }
 
@@ -120,6 +135,30 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val newTabs = s.tabs.toMutableList()
         newTabs[s.activeIndex] = t.copy(text = text, dirty = true)
         _state.value = s.copy(tabs = newTabs, status = "未保存")
+        // 触发防抖语法检查
+        requestSyntaxCheck(t.file, text)
+    }
+
+    /**
+     * 防抖调用 clang -fsyntax-only，结果写入 [diagnostics]。
+     * 先把最新内容落盘，clang 才能读到。
+     */
+    private fun requestSyntaxCheck(file: File, text: String) {
+        syntaxJob?.cancel()
+        syntaxJob = viewModelScope.launch {
+            delay(800)
+            syntaxMutex.withLock {
+                runCatching {
+                    // 落盘最新内容
+                    withContext(Dispatchers.IO) { file.writeText(text) }
+                    val errs = build.syntaxCheck(file)
+                    _diagnostics.value = errs
+                    _state.value = _state.value.copy(
+                        status = if (errs.isEmpty()) "语法 OK" else "${errs.size} 个问题"
+                    )
+                }
+            }
+        }
     }
 
     fun saveActive() {

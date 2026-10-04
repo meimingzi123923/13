@@ -48,7 +48,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.pocketcode.studio.core.build.BuildRunService
 import com.pocketcode.studio.core.editor.CLanguage
+import io.github.rosemoe.sora.lang.diagnostic.DiagnosticDetail
+import io.github.rosemoe.sora.lang.diagnostic.DiagnosticRegion
+import io.github.rosemoe.sora.lang.diagnostic.DiagnosticsContainer
 import io.github.rosemoe.sora.text.Content
 import io.github.rosemoe.sora.text.ContentListener
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -121,7 +125,8 @@ private fun MainEditor(vm: EditorViewModel, state: UiState) {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             } else {
-                CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) })
+                val diagnostics by vm.diagnostics.collectAsState()
+                CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) }, diagnostics = diagnostics)
             }
         }
         // 终端面板（底部滑入）
@@ -142,8 +147,10 @@ private fun MainEditor(vm: EditorViewModel, state: UiState) {
  * - 文本变更通过 [onTextChange] 回传 ViewModel，标记未保存。
  */
 @Composable
-private fun CodeEditorView(tab: Tab, onTextChange: (String) -> Unit) {
+private fun CodeEditorView(tab: Tab, onTextChange: (String) -> Unit, diagnostics: List<BuildRunService.SyntaxError>) {
     val context = LocalContext.current
+    var editor by remember { mutableStateOf<CodeEditor?>(null) }
+
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
@@ -152,7 +159,7 @@ private fun CodeEditorView(tab: Tab, onTextChange: (String) -> Unit) {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
-                // C 语言 + 关键字补全（补全由 CLanguage.requireAutoComplete 提供）
+                // C 语言高亮 + 关键字补全
                 setEditorLanguage(CLanguage())
                 setText(tab.text)
                 // 文本变更回传
@@ -180,15 +187,50 @@ private fun CodeEditorView(tab: Tab, onTextChange: (String) -> Unit) {
                     }
                 }
                 text.addContentListener(listener)
+                editor = this
             }
         },
-        update = { editor ->
-            // tab 切换时 key 变化会触发重建，此处仅同步外部可能的文本覆盖
-            if (editor.text.toString() != tab.text && !tab.dirty) {
-                editor.setText(tab.text)
+        update = { ed ->
+            if (ed.text.toString() != tab.text && !tab.dirty) {
+                ed.setText(tab.text)
             }
+            editor = ed
         },
     )
+
+    // 诊断变化时，把 line:col 转成字符索引并画波浪线
+    LaunchedEffect(diagnostics, editor) {
+        val ed = editor ?: return@LaunchedEffect
+        val container = DiagnosticsContainer()
+        val content = ed.text
+        diagnostics.forEach { err ->
+            val start = lineColToIndex(content, err.line, err.column)
+            if (start < 0) return@forEach
+            val lineLen = content.getLine(err.line - 1).length
+            val end = (start + (lineLen - err.column + 1).coerceAtLeast(1)).coerceAtMost(content.length)
+            container.addDiagnostic(
+                DiagnosticRegion(
+                    start,
+                    end,
+                    if (err.isError) DiagnosticRegion.SEVERITY_ERROR else DiagnosticRegion.SEVERITY_WARNING,
+                    err.hashCode().toLong(),
+                    DiagnosticDetail(err.message, err.message, emptyList(), null),
+                )
+            )
+        }
+        ed.setDiagnostics(container)
+    }
+}
+
+/** 把 1-based 的 line:column 转成文档字符偏移。 */
+private fun lineColToIndex(content: Content, line1: Int, col1: Int): Int {
+    if (line1 < 1) return -1
+    var idx = 0
+    for (i in 0 until line1 - 1) {
+        idx += content.getLine(i).length + 1
+    }
+    idx += (col1 - 1).coerceAtLeast(0)
+    return idx
 }
 
 @Composable

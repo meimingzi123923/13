@@ -47,6 +47,9 @@ Java_com_pocketcode_studio_core_terminal_PcsTerm_nativeCreateSubprocess(
         }
         setenv("TERM", "xterm-256color", 1);
         setenv("LANG", "en_US.UTF-8", 1);
+        // 去除提示符，让编译/运行输出更干净
+        setenv("PS1", "", 1);
+        setenv("PS2", "", 1);
 
         const char *shell = "/system/bin/sh";
         if (access(shell, X_OK) != 0) shell = "/bin/sh";

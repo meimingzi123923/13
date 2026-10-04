@@ -2,6 +2,7 @@ package com.pocketcode.studio.core.editor
 
 import android.os.Bundle
 import io.github.rosemoe.sora.lang.EmptyLanguage
+import io.github.rosemoe.sora.lang.analysis.AnalyzeManager
 import io.github.rosemoe.sora.lang.completion.CompletionItemKind
 import io.github.rosemoe.sora.lang.completion.CompletionPublisher
 import io.github.rosemoe.sora.lang.completion.SimpleCompletionItem
@@ -11,12 +12,16 @@ import io.github.rosemoe.sora.text.ContentReference
 /**
  * C 语言编辑器语言层。
  *
- * 继承 [EmptyLanguage]（不做语法高亮与语义分析），只重写 [requireAutoComplete]
- * 提供 C 关键字 / 类型 / 常用库函数补全。
+ * - 继承 [EmptyLanguage]，接入 [CAnalyzer] 提供语法高亮；
+ * - 重写 [requireAutoComplete] 提供关键字/类型/库函数补全。
  *
  * 挂到 CodeEditor：`editor.setEditorLanguage(CLanguage())`。
  */
 class CLanguage : EmptyLanguage() {
+
+    private val analyzer = CAnalyzer()
+
+    override fun getAnalyzeManager(): AnalyzeManager = analyzer
 
     override fun requireAutoComplete(
         content: ContentReference,
