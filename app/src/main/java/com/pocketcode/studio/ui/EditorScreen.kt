@@ -1,5 +1,6 @@
 package com.pocketcode.studio.ui
 
+import android.content.res.Configuration
 import android.view.ViewGroup
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
@@ -43,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -87,6 +92,9 @@ fun EditorScreen(vm: EditorViewModel) {
                     IconButton(onClick = { vm.saveActive() }) {
                         Icon(Icons.Default.Save, contentDescription = "保存")
                     }
+                    IconButton(onClick = { vm.compileActive() }) {
+                        Icon(Icons.Default.Build, contentDescription = "编译")
+                    }
                     IconButton(onClick = { vm.runActive() }) {
                         Icon(Icons.Default.PlayArrow, contentDescription = "运行")
                     }
@@ -114,30 +122,67 @@ fun EditorScreen(vm: EditorViewModel) {
 
 @Composable
 private fun MainEditor(vm: EditorViewModel, state: UiState) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        TabStrip(vm, state)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            val tab = state.active
-            if (tab == null) {
-                Text(
-                    "没有打开的文件",
-                    modifier = Modifier.align(Alignment.Center),
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                )
-            } else {
-                val diagnostics by vm.diagnostics.collectAsState()
-                CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) }, diagnostics = diagnostics)
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    if (isLandscape) {
+        // 横屏：左侧文件树，右侧编辑器（左右分栏）
+        Row(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.width(220.dp).fillMaxHeight()) {
+                FileTreeOverlay(vm)
+            }
+            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                TabStrip(vm, state)
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    val tab = state.active
+                    if (tab == null) {
+                        Text(
+                            "没有打开的文件",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        )
+                    } else {
+                        val diagnostics by vm.diagnostics.collectAsState()
+                        CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) }, diagnostics = diagnostics)
+                    }
+                }
+                AnimatedVisibility(
+                    visible = state.terminalVisible,
+                    enter = slideInVertically(tween(180)) { it } + fadeIn(tween(180)),
+                    exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180)),
+                ) {
+                    TerminalPanel(vm, state)
+                }
+                StatusBar(state)
             }
         }
-        // 终端面板（底部滑入）
-        AnimatedVisibility(
-            visible = state.terminalVisible,
-            enter = slideInVertically(tween(180)) { it } + fadeIn(tween(180)),
-            exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180)),
-        ) {
-            TerminalPanel(vm, state)
+    } else {
+        // 竖屏：保持原有纵向布局
+        Column(modifier = Modifier.fillMaxSize()) {
+            TabStrip(vm, state)
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                val tab = state.active
+                if (tab == null) {
+                    Text(
+                        "没有打开的文件",
+                        modifier = Modifier.align(Alignment.Center),
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    )
+                } else {
+                    val diagnostics by vm.diagnostics.collectAsState()
+                    CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) }, diagnostics = diagnostics)
+                }
+            }
+            // 终端面板（底部滑入）
+            AnimatedVisibility(
+                visible = state.terminalVisible,
+                enter = slideInVertically(tween(180)) { it } + fadeIn(tween(180)),
+                exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180)),
+            ) {
+                TerminalPanel(vm, state)
+            }
+            StatusBar(state)
         }
-        StatusBar(state)
     }
 }
 
@@ -286,7 +331,7 @@ private fun TerminalPanel(vm: EditorViewModel, state: UiState) {
     var cmd by remember { mutableStateOf(TextFieldValue("")) }
 
     Card(
-        modifier = Modifier.fillMaxWidth().height(240.dp).padding(6.dp),
+            modifier = Modifier.fillMaxWidth().height(160.dp).padding(6.dp),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
@@ -348,6 +393,8 @@ private fun StatusBar(state: UiState) {
 @Composable
 private fun FileTreeOverlay(vm: EditorViewModel) {
     val files = remember { vm.workspace.listFiles()?.sortedBy { it.name } ?: emptyList() }
+    var showNewFileDialog by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf(TextFieldValue("")) }
     Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopAppBar(
@@ -355,6 +402,11 @@ private fun FileTreeOverlay(vm: EditorViewModel) {
                 navigationIcon = {
                     IconButton(onClick = { vm.toggleFileTree() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showNewFileDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "新建文件")
                     }
                 },
                 defaultWindowInsetsPadding = false,
@@ -376,6 +428,55 @@ private fun FileTreeOverlay(vm: EditorViewModel) {
                                 vm.toggleFileTree()
                             },
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showNewFileDialog) {
+        // 自绘简易对话框（避免依赖 material3 / 不确定的 MiuiX 对话框 API）
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x88000000))
+                .clickable { showNewFileDialog = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("新建文件", fontSize = 16.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    TextField(
+                        value = newFileName,
+                        onValueChange = { newFileName = it },
+                        singleLine = true,
+                        label = "文件名",
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        IconButton(onClick = {
+                            newFileName = TextFieldValue("")
+                            showNewFileDialog = false
+                        }) {
+                            Text("取消", fontSize = 14.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = {
+                            val name = newFileName.text.trim()
+                            if (name.isNotEmpty()) {
+                                vm.createFile(name)
+                            }
+                            newFileName = TextFieldValue("")
+                            showNewFileDialog = false
+                        }) {
+                            Text("创建", fontSize = 14.sp)
+                        }
                     }
                 }
             }

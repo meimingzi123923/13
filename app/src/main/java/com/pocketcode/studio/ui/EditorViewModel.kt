@@ -192,20 +192,75 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 一键编译并运行当前 C 文件。 */
+    /** 在保存前落盘当前未保存内容（若有）。 */
+    private suspend fun flushActiveIfDirty() {
+        val s = _state.value
+        val t = s.active ?: return
+        if (t.dirty) {
+            runCatching { t.file.writeText(t.text) }
+            val newTabs = s.tabs.toMutableList()
+            newTabs[s.activeIndex] = t.copy(dirty = false)
+            _state.value = s.copy(tabs = newTabs)
+        }
+    }
+
+    /** 清空终端输出。 */
+    private fun clearTerminal() {
+        _state.value = _state.value.copy(terminalLines = emptyList())
+    }
+
+    /** 一键编译并运行当前 C 文件（运行前清空终端）。 */
     fun runActive() {
         val t = _state.value.active ?: return
         val file = t.file
         viewModelScope.launch {
             try {
-                if (t.dirty) {
-                    runCatching { file.writeText(t.text) }
-                    val s = _state.value
-                    val newTabs = s.tabs.toMutableList()
-                    newTabs[s.activeIndex] = t.copy(dirty = false)
-                    _state.value = s.copy(tabs = newTabs)
-                }
+                flushActiveIfDirty()
+                clearTerminal()
                 _state.value = _state.value.copy(terminalVisible = true, status = "编译运行中…")
+                val code = build.runWithCompile(file.parentFile ?: workspace, file) { line ->
+                    TerminalService.output.tryEmit(line)
+                }
+                _state.value = _state.value.copy(
+                    status = if (code == 0) "已执行" else "执行失败($code)"
+                )
+            } catch (e: Throwable) {
+                TerminalService.output.tryEmit("崩溃：${e.message ?: e.javaClass.simpleName}\n")
+                _state.value = _state.value.copy(status = "执行异常")
+            }
+        }
+    }
+
+    /** 仅编译当前 C 文件（不运行）。 */
+    fun compileActive() {
+        val t = _state.value.active ?: return
+        val file = t.file
+        viewModelScope.launch {
+            try {
+                flushActiveIfDirty()
+                clearTerminal()
+                _state.value = _state.value.copy(terminalVisible = true, status = "编译中…")
+                val code = build.compile(file.parentFile ?: workspace, file) { line ->
+                    TerminalService.output.tryEmit(line)
+                }
+                _state.value = _state.value.copy(
+                    status = if (code == 0) "编译成功" else "编译失败($code)"
+                )
+            } catch (e: Throwable) {
+                TerminalService.output.tryEmit("崩溃：${e.message ?: e.javaClass.simpleName}\n")
+                _state.value = _state.value.copy(status = "编译异常")
+            }
+        }
+    }
+
+    /** 仅运行已编译产物（不重新编译）。 */
+    fun runCompiled() {
+        val t = _state.value.active ?: return
+        val file = t.file
+        viewModelScope.launch {
+            try {
+                clearTerminal()
+                _state.value = _state.value.copy(terminalVisible = true, status = "运行中…")
                 val code = build.run(file.parentFile ?: workspace, file) { line ->
                     TerminalService.output.tryEmit(line)
                 }
@@ -215,6 +270,30 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Throwable) {
                 TerminalService.output.tryEmit("崩溃：${e.message ?: e.javaClass.simpleName}\n")
                 _state.value = _state.value.copy(status = "执行异常")
+            }
+        }
+    }
+
+    /** 在工作目录创建新文件（若同名已存在则直接打开）。 */
+    fun createFile(name: String) {
+        val clean = name.trim()
+        if (clean.isBlank()) return
+        if (clean.contains('/') || clean.contains('\\')) {
+            _state.value = _state.value.copy(status = "文件名不能包含路径分隔符")
+            return
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val f = File(workspace, clean)
+                if (f.exists()) {
+                    openFile(f)
+                } else {
+                    runCatching { f.createNewFile() }
+                        .onSuccess { openFile(f) }
+                        .onFailure {
+                            _state.value = _state.value.copy(status = "创建失败：${it.message}")
+                        }
+                }
             }
         }
     }

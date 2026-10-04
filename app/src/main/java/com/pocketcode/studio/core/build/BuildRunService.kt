@@ -73,23 +73,16 @@ class BuildRunService(private val context: Context) {
     }
 
     /**
-     * 编译并运行 C 源码，通过 [terminal] 回调输出编译报错与程序运行结果。
-     * @return 0 成功，非 0 失败码。
+     * 仅编译 C 源码（不运行），通过 [terminal] 回调输出编译报错。
+     * @return 0 编译成功，非 0 失败码。
      */
-    suspend fun run(
+    suspend fun compile(
         projectDir: File,
         sourceFile: File,
         terminal: (String) -> Unit,
     ): Int = withContext(Dispatchers.IO) {
         try {
-            if (!native.available()) {
-                terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
-            }
-            // 把解包进度透传到终端，避免首次解包 80MB 时用户误以为卡死
-            if (!runCatching { native.ensure(log = { terminal(it + "\n") }) }.getOrDefault(false)) {
-                terminal("✗ 工具链释放失败\n")
-                return@withContext -1
-            }
+            if (!ensureToolchain(terminal)) return@withContext -1
 
             val dir = sourceFile.parentFile ?: projectDir
             val env = native.envMap()
@@ -102,10 +95,33 @@ class BuildRunService(private val context: Context) {
             )
             if (compile.exit != 0) {
                 terminal(compile.stderr.ifEmpty { "编译失败（exit ${compile.exit}）\n" })
-                return@withContext compile.exit
+            } else {
+                terminal("✓ 编译成功\n")
             }
+            compile.exit
+        } catch (e: Throwable) {
+            terminal("编译异常：${e.message ?: e.javaClass.simpleName}\n")
+            -1
+        }
+    }
 
-            // 运行，捕获标准输出与错误
+    /**
+     * 运行已编译产物（a.out），通过 [terminal] 回调输出程序输出。
+     * @return 0 成功，非 0 失败码。
+     */
+    suspend fun run(
+        projectDir: File,
+        sourceFile: File,
+        terminal: (String) -> Unit,
+    ): Int = withContext(Dispatchers.IO) {
+        try {
+            val dir = sourceFile.parentFile ?: projectDir
+            val out = File(dir, "a.out")
+            if (!out.exists()) {
+                terminal("✗ 尚未编译，请先编译\n")
+                return@withContext -1
+            }
+            val env = native.envMap()
             val run = exec(listOf("./a.out"), dir, env)
             if (run.stdout.isNotEmpty()) terminal(run.stdout)
             if (run.stderr.isNotEmpty()) terminal(run.stderr)
@@ -114,6 +130,32 @@ class BuildRunService(private val context: Context) {
             terminal("运行异常：${e.message ?: e.javaClass.simpleName}\n")
             -1
         }
+    }
+
+    /** 确保内置工具链已释放（把解包进度透传到终端，避免首次解包 80MB 时误以为卡死）。 */
+    private suspend fun ensureToolchain(terminal: (String) -> Unit): Boolean {
+        if (!native.available()) {
+            terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
+        }
+        if (!runCatching { native.ensure(log = { terminal(it + "\n") }) }.getOrDefault(false)) {
+            terminal("✗ 工具链释放失败\n")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * 编译并运行 C 源码（一键），通过 [terminal] 回调输出编译报错与程序运行结果。
+     * @return 0 成功，非 0 失败码。
+     */
+    suspend fun runWithCompile(
+        projectDir: File,
+        sourceFile: File,
+        terminal: (String) -> Unit,
+    ): Int {
+        val compCode = compile(projectDir, sourceFile, terminal)
+        if (compCode != 0) return compCode
+        return run(projectDir, sourceFile, terminal)
     }
 
     // ─────────────────────────────────────────────
