@@ -26,8 +26,7 @@ class App : Application() {
         super.onCreate()
         instance = this
 
-        // 首次启动准备工作区与插件目录
-        File("/sdcard/PocketCodeStudio/workspaces").mkdirs()
+        // 插件目录（应用私有目录，无需存储权限）
         File(filesDir.parentFile, "plugins").mkdirs()
 
         plugins = PluginManager(this)

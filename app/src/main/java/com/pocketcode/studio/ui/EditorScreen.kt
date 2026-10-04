@@ -1,6 +1,12 @@
 package com.pocketcode.studio.ui
 
-import android.content.Context
+import android.view.ViewGroup
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -20,12 +26,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,7 +47,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.pocketcode.studio.util.StoragePermission
+import androidx.compose.ui.viewinterop.AndroidView
+import com.pocketcode.studio.core.editor.CLanguage
+import io.github.rosemoe.sora.text.Content
+import io.github.rosemoe.sora.text.ContentListener
+import io.github.rosemoe.sora.widget.CodeEditor
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -50,23 +59,18 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 主界面（MiuiX 0.9.4 版）。
- * - 顶部：文件 / 保存 / 运行 / 终端 / 设置
- * - 中部：标签页 + 代码编辑区
- * - 底部：可折叠终端 + 状态栏
- * - 浮层：文件树、设置页、首次使用引导
+ * 主界面（精简版，仅 C 语言）。
+ * - 顶栏：文件树 / 保存 / 运行 / 终端
+ * - 中部：标签页 + 代码编辑区（Sora Editor，带 C 关键字补全）
+ * - 底部：可折叠终端面板 + 状态栏
  */
 @Composable
 fun EditorScreen(vm: EditorViewModel) {
     val state by vm.state.collectAsState()
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("pcs_prefs", Context.MODE_PRIVATE) }
-    var guideShown by remember { mutableStateOf(prefs.getBoolean("guide_shown", false)) }
 
     Scaffold(
         topBar = {
@@ -85,9 +89,6 @@ fun EditorScreen(vm: EditorViewModel) {
                     IconButton(onClick = { vm.toggleTerminal() }) {
                         Icon(Icons.Default.Terminal, contentDescription = "终端")
                     }
-                    IconButton(onClick = { vm.toggleSettings() }) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
                 },
             )
         },
@@ -95,23 +96,13 @@ fun EditorScreen(vm: EditorViewModel) {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             MainEditor(vm, state)
 
-            if (state.fileTreeVisible) FileTreeOverlay(vm, state)
-            if (state.settingsVisible) SettingsOverlay(vm, state)
-
-            OverlayDialog(
-                show = !guideShown,
-                title = "欢迎使用 PocketCode Studio",
-                summary = "工作区已由 App 自动创建，并内置了示例文件。",
-                onDismissRequest = {
-                    guideShown = true
-                    prefs.edit().putBoolean("guide_shown", true).apply()
-                },
+            // 文件树浮层（覆盖整个编辑区，切换流畅）
+            AnimatedVisibility(
+                visible = state.fileTreeVisible,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(120)),
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text("1. 顶部选择文件树，选择文件开始编辑", fontSize = 14.sp)
-                    Text("2. 保存后，点运行一键执行", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
-                    Text("3. 进入设置，可自选默认运行语言", fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
-                }
+                FileTreeOverlay(vm)
             }
         }
     }
@@ -130,12 +121,74 @@ private fun MainEditor(vm: EditorViewModel, state: UiState) {
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                 )
             } else {
-                EditorPane(vm, tab)
+                CodeEditorView(tab = tab, onTextChange = { vm.updateActive(it) })
             }
         }
-        if (state.terminalVisible) TerminalPanel(vm, state)
+        // 终端面板（底部滑入）
+        AnimatedVisibility(
+            visible = state.terminalVisible,
+            enter = slideInVertically(tween(180)) { it } + fadeIn(tween(180)),
+            exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180)),
+        ) {
+            TerminalPanel(vm, state)
+        }
         StatusBar(state)
     }
+}
+
+/**
+ * Sora Editor 的 Compose 封装。
+ * - 按 tab.file 作为 key，切换标签时重建编辑器，避免跨标签状态串扰；
+ * - 文本变更通过 [onTextChange] 回传 ViewModel，标记未保存。
+ */
+@Composable
+private fun CodeEditorView(tab: Tab, onTextChange: (String) -> Unit) {
+    val context = LocalContext.current
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            CodeEditor(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                // C 语言 + 关键字补全（补全由 CLanguage.requireAutoComplete 提供）
+                setEditorLanguage(CLanguage())
+                setText(tab.text)
+                // 文本变更回传
+                val listener = object : ContentListener {
+                    override fun beforeReplace(content: Content) {}
+                    override fun afterInsert(
+                        content: Content,
+                        startLine: Int,
+                        startColumn: Int,
+                        endLine: Int,
+                        endColumn: Int,
+                        insertedContent: CharSequence,
+                    ) {
+                        onTextChange(content.toString())
+                    }
+                    override fun afterDelete(
+                        content: Content,
+                        startLine: Int,
+                        startColumn: Int,
+                        endLine: Int,
+                        endColumn: Int,
+                        deletedContent: CharSequence,
+                    ) {
+                        onTextChange(content.toString())
+                    }
+                }
+                text.addContentListener(listener)
+            }
+        },
+        update = { editor ->
+            // tab 切换时 key 变化会触发重建，此处仅同步外部可能的文本覆盖
+            if (editor.text.toString() != tab.text && !tab.dirty) {
+                editor.setText(tab.text)
+            }
+        },
+    )
 }
 
 @Composable
@@ -181,24 +234,6 @@ private fun TabStrip(vm: EditorViewModel, state: UiState) {
 }
 
 @Composable
-private fun EditorPane(vm: EditorViewModel, tab: Tab) {
-    var value by remember(tab.file) { mutableStateOf(TextFieldValue(tab.text)) }
-    TextField(
-        value = value,
-        onValueChange = {
-            value = it
-            vm.updateActive(it.text)
-        },
-        modifier = Modifier.fillMaxSize().padding(8.dp),
-        textStyle = MiuixTheme.textStyles.main.copy(
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-        ),
-        label = "",
-    )
-}
-
-@Composable
 private fun TerminalPanel(vm: EditorViewModel, state: UiState) {
     val listState = rememberLazyListState()
     LaunchedEffect(state.terminalLines.size) {
@@ -209,7 +244,7 @@ private fun TerminalPanel(vm: EditorViewModel, state: UiState) {
     var cmd by remember { mutableStateOf(TextFieldValue("")) }
 
     Card(
-        modifier = Modifier.fillMaxWidth().height(220.dp).padding(6.dp),
+        modifier = Modifier.fillMaxWidth().height(240.dp).padding(6.dp),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
@@ -238,7 +273,7 @@ private fun TerminalPanel(vm: EditorViewModel, state: UiState) {
                 Spacer(modifier = Modifier.width(8.dp))
                 IconButton(onClick = {
                     if (cmd.text.isNotBlank()) {
-                        vm.execRoot(cmd.text)
+                        vm.execCmd(cmd.text)
                         cmd = TextFieldValue("")
                     }
                 }) {
@@ -261,9 +296,7 @@ private fun StatusBar(state: UiState) {
             color = MiuixTheme.colorScheme.onBackgroundVariant,
         )
         Text(
-            text = Languages.label(state.defaultLanguage) +
-                " | " + (if (state.rootAvailable) "Root" else "普通") +
-                " | " + (if (state.storageGranted) "存储OK" else "存储受限"),
+            text = "C 语言 | ${state.workspacePath.substringAfterLast('/')}",
             fontSize = 12.sp,
             color = MiuixTheme.colorScheme.onBackgroundVariant,
         )
@@ -271,17 +304,15 @@ private fun StatusBar(state: UiState) {
 }
 
 @Composable
-private fun FileTreeOverlay(vm: EditorViewModel, state: UiState) {
-    val files = remember(state.workspacePath) {
-        vm.workspace.listFiles()?.sortedBy { it.name } ?: emptyList()
-    }
+private fun FileTreeOverlay(vm: EditorViewModel) {
+    val files = remember { vm.workspace.listFiles()?.sortedBy { it.name } ?: emptyList() }
     Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopAppBar(
                 title = "文件",
                 navigationIcon = {
                     IconButton(onClick = { vm.toggleFileTree() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 defaultWindowInsetsPadding = false,
@@ -304,77 +335,6 @@ private fun FileTreeOverlay(vm: EditorViewModel, state: UiState) {
                             },
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsOverlay(vm: EditorViewModel, state: UiState) {
-    val context = LocalContext.current
-    Box(modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            TopAppBar(
-                title = "设置",
-                navigationIcon = {
-                    IconButton(onClick = { vm.toggleSettings() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                defaultWindowInsetsPadding = false,
-            )
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                item {
-                    Text(
-                        "权限",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    ArrowPreference(
-                        title = "所有文件访问权限",
-                        summary = if (state.storageGranted) "已授权" else "未授权，点击前往系统设置授权",
-                        onClick = {
-                            if (!state.storageGranted) StoragePermission.requestAccess(context)
-                        },
-                    )
-                }
-                item {
-                    Text(
-                        "默认运行语言",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                }
-                items(Languages.all) { pair ->
-                    ArrowPreference(
-                        title = pair.second,
-                        endActions = {
-                            if (state.defaultLanguage == pair.first) {
-                                Text(
-                                    "已选择",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                )
-                            }
-                        },
-                        onClick = { vm.setDefaultLanguage(pair.first) },
-                    )
-                }
-                item {
-                    Text(
-                        "工作区",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    )
-                    ArrowPreference(
-                        title = "重建示例文件",
-                        summary = state.workspacePath,
-                        onClick = { vm.reseedWorkspace() },
-                    )
                 }
             }
         }

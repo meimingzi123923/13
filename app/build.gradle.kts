@@ -81,7 +81,6 @@ dependencies {
     implementation("com.github.topjohnwu.libsu:service:5.2.2")
 
     // 网络 / 序列化 / 协程
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 

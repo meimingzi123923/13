@@ -24,13 +24,4 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    /**
-     * 每次回到前台都重新检查「所有文件访问」授权状态：
-     * 用户从系统设置页授权后返回，界面会立即解锁文件读写。
-     */
-    override fun onResume() {
-        super.onResume()
-        vm.refreshStorageAccess()
-    }
 }

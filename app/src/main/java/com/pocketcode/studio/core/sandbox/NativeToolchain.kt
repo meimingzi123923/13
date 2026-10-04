@@ -180,9 +180,10 @@ class NativeToolchain(private val context: Context) {
     // ============================================================
 
     private fun fixups() {
-        // clang 系：Termux 包内没有裸名 `clang`，补上（clang 按 argv[0] 判定 C++ 模式）
-        symlink("clang-21", "clang")
-        symlink("clang-21", "clang++")
+        // clang 系：用包装脚本注入 Android 原生编译参数，同时用 exec -a 保留 argv[0]
+        // （clang 按 argv[0] 判定 C/C++ 模式），这样 `clang main.c` / `clang++ main.cpp` 都能直接用。
+        wrapper("clang", clangDriver("clang-21"), argv0 = "clang")
+        wrapper("clang++", clangDriver("clang++"), argv0 = "clang++")
         symlink("lld", "ld.lld")
         symlink("lld", "ld")
 
@@ -193,12 +194,11 @@ class NativeToolchain(private val context: Context) {
             Files.createSymbolicLink(asm.toPath(), Paths.get("aarch64-linux-android/asm"))
         }
 
-        // gcc/g++ 包装脚本：自动注入 Android 原生编译所需参数，
-        // 这样「gcc main.c -o a.out」这种最朴素的命令也能直接用。
-        wrapper("gcc", clangDriver("clang-21"))
-        wrapper("cc", clangDriver("clang-21"))
-        wrapper("g++", clangDriver("clang++"))
-        wrapper("c++", clangDriver("clang++"))
+        // gcc/g++ 兼容别名，同样注入参数
+        wrapper("gcc", clangDriver("clang-21"), argv0 = "clang")
+        wrapper("cc", clangDriver("clang-21"), argv0 = "clang")
+        wrapper("g++", clangDriver("clang++"), argv0 = "clang++")
+        wrapper("c++", clangDriver("clang++"), argv0 = "clang++")
     }
 
     private fun symlink(target: String, name: String) {
@@ -221,10 +221,11 @@ class NativeToolchain(private val context: Context) {
         append("-Wl,-rpath,").append(sh(libDir.absolutePath))
     }
 
-    private fun wrapper(name: String, driver: String) {
+    private fun wrapper(name: String, driver: String, argv0: String = name) {
         val content = buildString {
             append("#!/system/bin/sh\n")
-            append("exec ").append(sh(driver)).append(" ").append(ccFlags()).append(" \"$@\"\n")
+            append("exec -a ").append(sh(argv0)).append(" ")
+                .append(sh(driver)).append(" ").append(ccFlags()).append(" \"$@\"\n")
         }
         runCatching {
             val f = File(binDir, name)

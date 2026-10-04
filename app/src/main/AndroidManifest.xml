@@ -2,19 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 网络：包管理 / 插件市场 / 下载工具链 -->
+    <!-- 网络：可选（预留，核心功能离线可用） -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 文件：读写工作区 -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
     <!-- 前台服务：长任务编译/终端 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- API 34+：声明了 foregroundServiceType 就必须配套声明对应类型权限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -24,8 +16,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PocketCodeStudio"
-        android:requestLegacyExternalStorage="true">
+        android:theme="@style/Theme.PocketCodeStudio">
 
         <activity
             android:name=".MainActivity"
