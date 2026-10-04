@@ -22,14 +22,27 @@ class BuildRunService(private val context: Context) {
 
     /** 通过 ProcessBuilder 执行命令，捕获输出（不回显命令）。 */
     private fun exec(args: List<String>, dir: File, env: Map<String, String>): ExecResult {
-        val pb = ProcessBuilder(args).directory(dir)
-        pb.environment().putAll(env)
-        pb.redirectErrorStream(false)
-        val proc = pb.start()
-        val out = proc.inputStream.bufferedReader().readText()
-        val err = proc.errorStream.bufferedReader().readText()
-        val code = proc.waitFor()
-        return ExecResult(code, out, err)
+        return try {
+            // 用 sh -c 执行，兼容 clang 等 shell 包装脚本（shebang）
+            val cmdLine = args.joinToString(" ") { shArg(it) }
+            val pb = ProcessBuilder("sh", "-c", cmdLine).directory(dir)
+            pb.environment().putAll(env)
+            pb.redirectErrorStream(false)
+            val proc = pb.start()
+            val out = proc.inputStream.bufferedReader().readText()
+            val err = proc.errorStream.bufferedReader().readText()
+            val code = proc.waitFor()
+            ExecResult(code, out, err)
+        } catch (e: Exception) {
+            ExecResult(-1, "", "执行异常：${e.message}\n")
+        }
+    }
+
+    private fun shArg(s: String): String {
+        // 简单参数直接返回，含特殊字符的加单引号
+        return if (s.any { it.isWhitespace() || it in "\"'\\$`" }) {
+            "'" + s.replace("'", "'\\''") + "'"
+        } else s
     }
 
     /**
@@ -41,33 +54,38 @@ class BuildRunService(private val context: Context) {
         sourceFile: File,
         terminal: (String) -> Unit,
     ): Int = withContext(Dispatchers.IO) {
-        if (!native.available()) {
-            terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
-        }
-        if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
-            terminal("✗ 工具链释放失败\n")
-            return@withContext -1
-        }
+        try {
+            if (!native.available()) {
+                terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
+            }
+            if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
+                terminal("✗ 工具链释放失败\n")
+                return@withContext -1
+            }
 
-        val dir = sourceFile.parentFile ?: projectDir
-        val env = native.envMap()
+            val dir = sourceFile.parentFile ?: projectDir
+            val env = native.envMap()
 
-        // 编译（关闭彩色诊断，输出干净文本）
-        val compile = exec(
-            listOf("clang", "-fno-color-diagnostics", sourceFile.name, "-o", "a.out"),
-            dir,
-            env,
-        )
-        if (compile.exit != 0) {
-            terminal(compile.stderr.ifEmpty { "编译失败（exit ${compile.exit}）\n" })
-            return@withContext compile.exit
+            // 编译（关闭彩色诊断，输出干净文本）
+            val compile = exec(
+                listOf("clang", "-fno-color-diagnostics", sourceFile.name, "-o", "a.out"),
+                dir,
+                env,
+            )
+            if (compile.exit != 0) {
+                terminal(compile.stderr.ifEmpty { "编译失败（exit ${compile.exit}）\n" })
+                return@withContext compile.exit
+            }
+
+            // 运行，捕获标准输出与错误
+            val run = exec(listOf("./a.out"), dir, env)
+            if (run.stdout.isNotEmpty()) terminal(run.stdout)
+            if (run.stderr.isNotEmpty()) terminal(run.stderr)
+            run.exit
+        } catch (e: Throwable) {
+            terminal("运行异常：${e.message ?: e.javaClass.simpleName}\n")
+            -1
         }
-
-        // 运行，捕获标准输出与错误
-        val run = exec(listOf("./a.out"), dir, env)
-        if (run.stdout.isNotEmpty()) terminal(run.stdout)
-        if (run.stderr.isNotEmpty()) terminal(run.stderr)
-        run.exit
     }
 
     // ─────────────────────────────────────────────

@@ -175,23 +175,27 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 一键编译并运行当前 C 文件。 */
     fun runActive() {
         val t = _state.value.active ?: return
-        // 先保存，确保运行的是最新内容
         val file = t.file
         viewModelScope.launch {
-            if (t.dirty) {
-                runCatching { file.writeText(t.text) }
-                val s = _state.value
-                val newTabs = s.tabs.toMutableList()
-                newTabs[s.activeIndex] = t.copy(dirty = false)
-                _state.value = s.copy(tabs = newTabs)
+            try {
+                if (t.dirty) {
+                    runCatching { file.writeText(t.text) }
+                    val s = _state.value
+                    val newTabs = s.tabs.toMutableList()
+                    newTabs[s.activeIndex] = t.copy(dirty = false)
+                    _state.value = s.copy(tabs = newTabs)
+                }
+                _state.value = _state.value.copy(terminalVisible = true, status = "编译运行中…")
+                val code = build.run(file.parentFile ?: workspace, file) { line ->
+                    TerminalService.output.tryEmit(line)
+                }
+                _state.value = _state.value.copy(
+                    status = if (code == 0) "已执行" else "执行失败($code)"
+                )
+            } catch (e: Throwable) {
+                TerminalService.output.tryEmit("崩溃：${e.message ?: e.javaClass.simpleName}\n")
+                _state.value = _state.value.copy(status = "执行异常")
             }
-            _state.value = _state.value.copy(terminalVisible = true, status = "编译运行中…")
-            val code = build.run(file.parentFile ?: workspace, file) { line ->
-                TerminalService.output.tryEmit(line)
-            }
-            _state.value = _state.value.copy(
-                status = if (code == 0) "已执行" else "执行失败($code)"
-            )
         }
     }
 
