@@ -2,6 +2,7 @@ package com.pocketcode.studio.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -118,6 +119,25 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
             )
             // 对已存在的文件做一次语法检查
             if (text.isNotEmpty()) requestSyntaxCheck(f, text)
+        }
+    }
+
+    /** 从外部 content:// 打开代码文件：读入内容并复制进工作区后打开。 */
+    fun importExternal(uri: Uri, name: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val app = getApplication<Application>()
+                    val text = app.contentResolver.openInputStream(uri)?.use {
+                        it.bufferedReader().readText()
+                    } ?: return@runCatching
+                    val dest = File(workspace, name)
+                    dest.writeText(text)
+                    openFile(dest)
+                }.onFailure {
+                    _state.value = _state.value.copy(status = "打开外部文件失败：${it.message}")
+                }
+            }
         }
     }
 

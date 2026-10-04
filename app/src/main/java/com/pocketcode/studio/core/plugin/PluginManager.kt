@@ -73,11 +73,13 @@ class PluginManager(private val context: Context) {
 
     data class LoadedPlugin(val manifest: Manifest, val dir: File, val engine: QuickJs?)
 
-    /** 扫描并加载所有插件目录。 */
+    /** 扫描并加载所有插件目录。单个插件加载失败不阻断其余插件。 */
     fun scan(): List<Manifest> {
         if (!root.exists()) root.mkdirs()
         return root.listFiles()?.filter { it.isDirectory }?.mapNotNull { dir ->
-            runCatching { load(dir) }.getOrNull()?.manifest
+            runCatching { load(dir) }
+                .onFailure { android.util.Log.e("PCSPlugin", "加载插件 ${dir.name} 失败", it) }
+                .getOrNull()?.manifest
         } ?: emptyList()
     }
 
@@ -91,36 +93,46 @@ class PluginManager(private val context: Context) {
 
     /** JS 插件：QuickJS 沙箱，注入 pcs.* 宿主 API。 */
     private fun loadJsPlugin(dir: File, manifest: Manifest): LoadedPlugin {
-        val engine = QuickJs.create()
-        // 宿主桥：暴露给 JS 沙箱的 pcs.* 实际落点。
-        // QuickJS 只能传基本类型/字符串，函数回调以「命令 id」登记，由 UI 触发。
-        val host = object : PluginHostApi {
-            override fun editorGet(): String = PluginHost.getText?.invoke() ?: ""
-            override fun editorSet(text: String) { PluginHost.setText?.invoke(text) }
-            override fun registerCommand(id: String) {
-                PluginHost.registered.getOrPut(manifest.id) { mutableListOf() }.add(id)
-            }
-            override fun toast(msg: String) { PluginHost.toast?.invoke("[${manifest.id}] $msg") }
-            override fun log(msg: String) {
-                android.util.Log.i("PCSPlugin", "[${manifest.id}] $msg")
-            }
+        // 关键修复：QuickJs.create() 会加载 native 库，可能抛 UnsatisfiedLinkError。
+        // 用 try/finally 保证引擎在初始化失败时被关闭，避免 native 资源泄漏。
+        val engine = try {
+            QuickJs.create()
+        } catch (t: Throwable) {
+            android.util.Log.e("PCSPlugin", "QuickJS 初始化失败（${manifest.id}）", t)
+            throw t
         }
-        engine.set("__host", PluginHostApi::class.java, host)
-        engine.set("__hostLog", PluginHostApi::class.java, host) // 兼容 pcs.log -> __hostLog.log
-        val bootstrap = """
-            var pcs = {
-              editor: { getText: () => __host.editorGet(), setText: (s) => __host.editorSet(s) },
-              commands: { register: (id) => __host.registerCommand(id) },
-              ui: { showToast: (m) => __host.toast(m) },
-              log: (m) => __hostLog.log(m)
-            };
-        """.trimIndent()
-        engine.evaluate(bootstrap)
-        engine.evaluate(File(dir, manifest.main).readText())
-        // 请求激活
-        runCatching { engine.evaluate("activate && activate({})") }
-        loaded[manifest.id] = LoadedPlugin(manifest, dir, engine)
-        return loaded[manifest.id]!!
+        try {
+            val host = object : PluginHostApi {
+                override fun editorGet(): String = PluginHost.getText?.invoke() ?: ""
+                override fun editorSet(text: String) { PluginHost.setText?.invoke(text) }
+                override fun registerCommand(id: String) {
+                    PluginHost.registered.getOrPut(manifest.id) { mutableListOf() }.add(id)
+                }
+                override fun toast(msg: String) { PluginHost.toast?.invoke("[${manifest.id}] $msg") }
+                override fun log(msg: String) {
+                    android.util.Log.i("PCSPlugin", "[${manifest.id}] $msg")
+                }
+            }
+            engine.set("__host", PluginHostApi::class.java, host)
+            engine.set("__hostLog", PluginHostApi::class.java, host) // 兼容 pcs.log -> __hostLog.log
+            val bootstrap = """
+                var pcs = {
+                  editor: { getText: () => __host.editorGet(), setText: (s) => __host.editorSet(s) },
+                  commands: { register: (id) => __host.registerCommand(id) },
+                  ui: { showToast: (m) => __host.toast(m) },
+                  log: (m) => __hostLog.log(m)
+                };
+            """.trimIndent()
+            engine.evaluate(bootstrap)
+            engine.evaluate(File(dir, manifest.main).readText())
+            // 请求激活
+            runCatching { engine.evaluate("activate && activate({})") }
+            loaded[manifest.id] = LoadedPlugin(manifest, dir, engine)
+            return loaded[manifest.id]!!
+        } catch (t: Throwable) {
+            runCatching { engine.close() }
+            throw t
+        }
     }
 
     /** JVM 插件：DexClassLoader 动态加载（此处仅骨架）。 */

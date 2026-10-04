@@ -20,21 +20,48 @@ class BuildRunService(private val context: Context) {
     /** 子进程执行结果。 */
     private data class ExecResult(val exit: Int, val stdout: String, val stderr: String)
 
-    /** 通过 ProcessBuilder 执行命令，捕获输出（不回显命令）。 */
+    /**
+     * 通过 ProcessBuilder 执行命令，捕获输出（不回显命令）。
+     *
+     * 关键修复：stdout / stderr 必须**并发消费**，绝不能「先 readText(stdout) 再 readText(stderr)」。
+     * 否则当子进程向 stderr 写了超过管道缓冲（典型 64KB）的数据时，子进程会阻塞在 write，
+     * 而父进程仍卡在 readText(stdout) 上，形成死锁——表现为编译/运行时应用卡死或 ANR。
+     * 这里用两个后台线程并发读取，并在 waitFor 前先 join，彻底消除死锁。
+     */
     private fun exec(args: List<String>, dir: File, env: Map<String, String>): ExecResult {
-        return try {
+        var proc: Process? = null
+        try {
             // 用 sh -c 执行，兼容 clang 等 shell 包装脚本（shebang）
             val cmdLine = args.joinToString(" ") { shArg(it) }
             val pb = ProcessBuilder("sh", "-c", cmdLine).directory(dir)
             pb.environment().putAll(env)
             pb.redirectErrorStream(false)
-            val proc = pb.start()
-            val out = proc.inputStream.bufferedReader().readText()
-            val err = proc.errorStream.bufferedReader().readText()
+            proc = pb.start()
+
+            // 并发读取 stdout / stderr，避免管道缓冲写满导致的死锁
+            val outBuf = StringBuilder()
+            val errBuf = StringBuilder()
+            val outThread = Thread({
+                runCatching {
+                    proc.inputStream.bufferedReader().forEachLine { outBuf.append(it).append('\n') }
+                }
+            }, "pcs-exec-out").apply { isDaemon = true }
+            val errThread = Thread({
+                runCatching {
+                    proc.errorStream.bufferedReader().forEachLine { errBuf.append(it).append('\n') }
+                }
+            }, "pcs-exec-err").apply { isDaemon = true }
+            outThread.start()
+            errThread.start()
+
             val code = proc.waitFor()
-            ExecResult(code, out, err)
+            // waitFor 返回后，确保两个读取线程都结束再加入
+            outThread.join(5000)
+            errThread.join(5000)
+            return ExecResult(code, outBuf.toString(), errBuf.toString())
         } catch (e: Exception) {
-            ExecResult(-1, "", "执行异常：${e.message}\n")
+            runCatching { proc?.destroy() }
+            return ExecResult(-1, "", "执行异常：${e.message}\n")
         }
     }
 
@@ -58,7 +85,8 @@ class BuildRunService(private val context: Context) {
             if (!native.available()) {
                 terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
             }
-            if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
+            // 把解包进度透传到终端，避免首次解包 80MB 时用户误以为卡死
+            if (!runCatching { native.ensure(log = { terminal(it + "\n") }) }.getOrDefault(false)) {
                 terminal("✗ 工具链释放失败\n")
                 return@withContext -1
             }
@@ -100,7 +128,7 @@ class BuildRunService(private val context: Context) {
     )
 
     suspend fun syntaxCheck(sourceFile: File): List<SyntaxError> = withContext(Dispatchers.IO) {
-        if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
+        if (!runCatching { native.ensure(log = { android.util.Log.i("PcsToolchain", it) }) }.getOrDefault(false)) {
             return@withContext emptyList()
         }
         val dir = sourceFile.parentFile ?: return@withContext emptyList()

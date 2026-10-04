@@ -4,6 +4,7 @@ import android.app.Application
 import com.pocketcode.studio.core.plugin.PluginManager
 import com.pocketcode.studio.core.terminal.TerminalService
 import java.io.File
+import kotlin.concurrent.thread
 
 /**
  * 应用入口。
@@ -30,9 +31,13 @@ class App : Application() {
         File(filesDir.parentFile, "plugins").mkdirs()
 
         plugins = PluginManager(this)
-        runCatching { plugins.scan() }   // 启动即扫描已装插件（失败不阻断启动）
 
-        // 预热终端服务：拿到 PTY 句柄，后续编译/运行复用
-        runCatching { TerminalService.createSession() }
+        // 关键修复：把插件扫描（含 QuickJS 引擎初始化，慢机型需数百 ms）
+        // 与终端预热（forkpty 创建 PTY 会话）移出主线程，放到后台执行，
+        // 避免 Application.onCreate 主线程重活导致启动闪退 / ANR。
+        thread(name = "pcs-init", isDaemon = true) {
+            runCatching { plugins.scan() }        // 启动即扫描已装插件（失败不阻断启动）
+            runCatching { TerminalService.createSession() } // 预热 PTY 会话
+        }
     }
 }

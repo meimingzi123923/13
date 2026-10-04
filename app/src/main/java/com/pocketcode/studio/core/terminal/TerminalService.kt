@@ -103,7 +103,25 @@ class TerminalService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification())
+        // 关键修复：API 34+ 要求 startForeground 显式指定前台服务类型，
+        // 否则抛 MissingForegroundServiceTypeException 导致服务（及编译任务）闪退。
+        try {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+                    val type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    startForeground(NOTIF_ID, buildNotification(), type)
+                }
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                    startForeground(NOTIF_ID, buildNotification(), 0)
+                }
+                else -> {
+                    @Suppress("DEPRECATION")
+                    startForeground(NOTIF_ID, buildNotification())
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("PcsTerm", "startForeground 失败", t)
+        }
         ensureSession()
         return START_STICKY
     }
