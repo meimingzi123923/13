@@ -247,6 +247,15 @@ class NativeToolchain(private val context: Context) {
         append("HOME=").append(sh(root.absolutePath)).append(" ")
     }
 
+    /** 以 Map 形式返回环境变量，供 ProcessBuilder.environment() 使用。 */
+    fun envMap(): Map<String, String> = mapOf(
+        "PATH" to "${binDir.absolutePath}:${System.getenv("PATH") ?: ""}",
+        "LD_LIBRARY_PATH" to "${libDir.absolutePath}:${System.getenv("LD_LIBRARY_PATH") ?: ""}",
+        "TMPDIR" to tmpDir.absolutePath,
+        "HOME" to root.absolutePath,
+        "LANG" to "en_US.UTF-8",
+    )
+
     /** 该语言是否由本工具链提供。 */
     fun provides(language: String): Boolean = language.lowercase() in setOf("c", "cpp", "c++")
 }

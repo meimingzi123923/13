@@ -2,7 +2,6 @@ package com.pocketcode.studio.core.build
 
 import android.content.Context
 import com.pocketcode.studio.core.sandbox.NativeToolchain
-import com.pocketcode.studio.core.terminal.TerminalService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -10,87 +9,91 @@ import java.io.File
 /**
  * 构建/运行服务（仅 C 语言）。
  *
- * 使用 APK 内置的 Android 原生 clang 工具链（[NativeToolchain]）编译并运行 C 源码，
- * 无需 proot、无 rootfs、不依赖系统 shell 之外的任何外部运行时。
- *
- * 工作区位于应用私有目录（filesDir/workspace），天然可执行，
- * 不再受 /sdcard 的 noexec 挂载与 FUSE 权限问题困扰。
+ * 使用 APK 内置的 Android 原生 clang 工具链（[NativeToolchain]）编译并运行 C 源码。
+ * 编译与运行均通过 ProcessBuilder 直接执行，**不经过 PTY**，
+ * 因此终端只显示编译报错与程序输出，不会回显命令或环境变量。
  */
 class BuildRunService(private val context: Context) {
 
-    /** 内置原生 C 工具链（clang / lld / libc++ …，无 proot）。 */
     private val native = NativeToolchain(context)
 
-    /** 生成实际命令字符串：编译 + 运行。 */
-    fun buildCommand(projectDir: File, sourceFile: File): String {
-        // clang 包装脚本已注入 Android 原生编译参数，产物放在工作区（私有目录，可执行）
-        val cmd = "clang ${sourceFile.name} -o a.out && ./a.out"
-        return "cd ${sh(projectDir.absolutePath)} && ${native.envPrefix()}$cmd"
+    /** 子进程执行结果。 */
+    private data class ExecResult(val exit: Int, val stdout: String, val stderr: String)
+
+    /** 通过 ProcessBuilder 执行命令，捕获输出（不回显命令）。 */
+    private fun exec(args: List<String>, dir: File, env: Map<String, String>): ExecResult {
+        val pb = ProcessBuilder(args).directory(dir)
+        pb.environment().putAll(env)
+        pb.redirectErrorStream(false)
+        val proc = pb.start()
+        val out = proc.inputStream.bufferedReader().readText()
+        val err = proc.errorStream.bufferedReader().readText()
+        val code = proc.waitFor()
+        return ExecResult(code, out, err)
     }
 
-    private fun sh(s: String) = "'" + s.replace("'", "'\\''") + "'"
-
     /**
-     * 编译并运行 C 源码。
-     * @return 0 表示已提交到 PTY 执行，-1 表示工具链/PTY 不可用。
+     * 编译并运行 C 源码，通过 [terminal] 回调输出编译报错与程序运行结果。
+     * @return 0 成功，非 0 失败码。
      */
     suspend fun run(
         projectDir: File,
         sourceFile: File,
         terminal: (String) -> Unit,
     ): Int = withContext(Dispatchers.IO) {
-        // 首次使用时释放工具链
         if (!native.available()) {
-            terminal("\u001b[36m\u25b6 首次释放内置 C 工具链（clang / lld）…\u001b[0m")
+            terminal("▸ 首次释放内置 C 工具链（clang / lld）…\n")
         }
-        if (!runCatching { native.ensure(log = terminal) }.getOrDefault(false)) {
-            terminal("\u001b[31m✗ 工具链释放失败\u001b[0m")
+        if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
+            terminal("✗ 工具链释放失败\n")
             return@withContext -1
         }
 
-        val cmd = buildCommand(projectDir, sourceFile)
-        terminal("\u001b[90m$ clang ${sourceFile.name} -o a.out && ./a.out\u001b[0m")
-        runPty(cmd, terminal)
-    }
+        val dir = sourceFile.parentFile ?: projectDir
+        val env = native.envMap()
 
-    /** 把命令写入 PTY 执行；返回 0 表示已提交，-1 表示 PTY 不可用。 */
-    private fun runPty(cmd: String, terminal: (String) -> Unit): Int {
-        val fd = TerminalService.ensureSession(root = false)
-        if (fd >= 0) {
-            TerminalService.write(cmd)
-            return 0
+        // 编译（关闭彩色诊断，输出干净文本）
+        val compile = exec(
+            listOf("clang", "-fno-color-diagnostics", sourceFile.name, "-o", "a.out"),
+            dir,
+            env,
+        )
+        if (compile.exit != 0) {
+            terminal(compile.stderr.ifEmpty { "编译失败（exit ${compile.exit}）\n" })
+            return@withContext compile.exit
         }
-        terminal("\u001b[31m\u2717 终端不可用，请确认 libpcs_term 已编译加载\u001b[0m")
-        return -1
+
+        // 运行，捕获标准输出与错误
+        val run = exec(listOf("./a.out"), dir, env)
+        if (run.stdout.isNotEmpty()) terminal(run.stdout)
+        if (run.stderr.isNotEmpty()) terminal(run.stderr)
+        run.exit
     }
 
     // ─────────────────────────────────────────────
-    // 实时语法检查（不运行，只做词法/语法分析）
+    // 实时语法检查
     // ─────────────────────────────────────────────
 
     data class SyntaxError(
-        val line: Int,      // 1-based
-        val column: Int,    // 1-based
+        val line: Int,
+        val column: Int,
         val message: String,
         val isError: Boolean,
     )
 
-    /**
-     * 用 clang -fsyntax-only 做语法检查，返回错误/警告列表。
-     * 通过 ProcessBuilder 直接调用（不经过 PTY），便于解析输出。
-     */
     suspend fun syntaxCheck(sourceFile: File): List<SyntaxError> = withContext(Dispatchers.IO) {
         if (!runCatching { native.ensure(log = {}) }.getOrDefault(false)) {
             return@withContext emptyList()
         }
-        val cmd = "${native.envPrefix()}clang -fsyntax-only -Wall ${sh(sourceFile.name)}"
+        val dir = sourceFile.parentFile ?: return@withContext emptyList()
+        val env = native.envMap()
         runCatching {
-            val pb = ProcessBuilder("sh", "-c", "cd ${sh(sourceFile.parentFile?.absolutePath ?: ".")} && $cmd")
-                .redirectErrorStream(true)
-            val proc = pb.start()
-            val output = proc.inputStream.bufferedReader().readText()
-            proc.waitFor()
-            parseClangOutput(output)
+            val result = exec(
+                listOf("clang", "-fsyntax-only", "-Wall", "-fno-color-diagnostics", sourceFile.name),
+                dir,
+                env,
+            )
+            parseClangOutput(result.stderr)
         }.getOrDefault(emptyList())
     }
 
